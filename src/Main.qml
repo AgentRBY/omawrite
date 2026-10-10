@@ -21,6 +21,7 @@ ApplicationWindow {
     readonly property color strongTextColor: backend.themeForeground
     readonly property color mutedColor: darkMode ? "#909191" : "#aeb1b5"
     readonly property color selectionFill: backend.themeSelection
+    readonly property color selectionTextColor: backend.themeSelectionForeground
     // The desktop's text size knob (GNOME's text-scaling-factor, which
     // `omarchy display text size` drives) anchored so its 12px default leaves
     // the app at the sizes it was designed around.
@@ -545,7 +546,7 @@ ApplicationWindow {
                 persistentSelection: true
                 activeFocusOnPress: true
                 color: win.textColor
-                selectedTextColor: win.strongTextColor
+                selectedTextColor: win.selectionTextColor
                 selectionColor: win.selectionFill
                 font.family: backend.editorFont
                 font.pixelSize: win.editorFontPixelSize
@@ -917,7 +918,7 @@ ApplicationWindow {
                         selectByMouse: true
                         color: win.textColor
                         selectionColor: win.selectionFill
-                        selectedTextColor: win.strongTextColor
+                        selectedTextColor: win.selectionTextColor
                         font.pixelSize: win.scaledSize(17)
                         clip: true
                         onTextChanged: win.updateSearch()
@@ -941,7 +942,7 @@ ApplicationWindow {
                         verticalAlignment: TextInput.AlignVCenter
                         color: win.textColor
                         selectionColor: win.selectionFill
-                        selectedTextColor: win.strongTextColor
+                        selectedTextColor: win.selectionTextColor
                         font.pixelSize: win.scaledSize(17)
                         Keys.onReturnPressed: replaceCurrentButton.clicked()
                     }

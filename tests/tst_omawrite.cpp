@@ -114,6 +114,7 @@ private slots:
             "mode = \"light\"\n"
             "accent = \"#112233\"\n"
             "selection = \"#445566\"\n"
+            "selection_foreground = \"#fafafa\"\n"
             "background = \"#fefefe\"\n"
             "foreground = \"#101010\"\n");
         QCOMPARE(colorsFile.write(palette), qint64(palette.size()));
@@ -124,7 +125,72 @@ private slots:
         QCOMPARE(backend.themeForeground(), QStringLiteral("#101010"));
         QCOMPARE(backend.themeAccent(), QStringLiteral("#112233"));
         QCOMPARE(backend.themeSelection(), QStringLiteral("#445566"));
+        QCOMPARE(backend.themeSelectionForeground(), QStringLiteral("#fafafa"));
         QVERIFY(!backend.darkMode());
+
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QCOMPARE(editor->property("selectionColor").value<QColor>(), QColor("#445566"));
+        QCOMPARE(editor->property("selectedTextColor").value<QColor>(), QColor("#fafafa"));
+    }
+
+    void fallsBackForSelectionColors_data() {
+        QTest::addColumn<QByteArray>("palette");
+        QTest::addColumn<QString>("selection");
+        QTest::addColumn<QString>("selectionForeground");
+
+        QTest::newRow("bright_foreground")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "bright_foreground = \"#ffffff\"\n"
+                          "selection = \"#333333\"\n")
+            << QStringLiteral("#333333") << QStringLiteral("#ffffff");
+        QTest::newRow("foreground")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "selection = \"#333333\"\n")
+            << QStringLiteral("#333333") << QStringLiteral("#c0c0c0");
+        QTest::newRow("selection_background")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "selection_background = \"#222222\"\n")
+            << QStringLiteral("#222222") << QStringLiteral("#c0c0c0");
+    }
+
+    void fallsBackForSelectionColors() {
+        QFETCH(QByteArray, palette);
+        QFETCH(QString, selection);
+        QFETCH(QString, selectionForeground);
+
+        QTemporaryDir homeDirectory;
+        QVERIFY(homeDirectory.isValid());
+
+        const QByteArray originalHome = qgetenv("HOME");
+        struct HomeRestorer {
+            QByteArray value;
+            ~HomeRestorer() { qputenv("HOME", value); }
+        } restoreHome{originalHome};
+        QVERIFY(qputenv("HOME", homeDirectory.path().toUtf8()));
+
+        const QString themeDirectory = homeDirectory.path()
+            + QStringLiteral("/.local/state/omarchy/current/theme");
+        QVERIFY(QDir().mkpath(themeDirectory));
+
+        QFile colorsFile(themeDirectory + QStringLiteral("/colors.toml"));
+        QVERIFY(colorsFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QCOMPARE(colorsFile.write(palette), qint64(palette.size()));
+        colorsFile.close();
+
+        Backend backend;
+        QCOMPARE(backend.themeSelection(), selection);
+        QCOMPARE(backend.themeSelectionForeground(), selectionForeground);
     }
 
     void ignoresFileWatcherEventsForSavedContents() {
