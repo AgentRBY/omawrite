@@ -349,6 +349,24 @@ void Backend::newWindow() {
         setStatus(QStringLiteral("Could not open a new window."));
 }
 
+void Backend::copyAsHtml() {
+    QTextDocument rendered;
+    rendered.setMarkdown(currentDocumentText());
+
+    // Drop Qt's fixed fonts and margins from the body and blocks, so the pasted
+    // text takes on the destination's own typeface and paragraph spacing.
+    QString html = rendered.toHtml();
+    static const QRegularExpression blockStyle(
+        QStringLiteral("<(body|p|h[1-6]|ul|ol|li)\\s+style=\"[^\"]*\""));
+    html.replace(blockStyle, QStringLiteral("<\\1"));
+
+    auto *mimeData = new QMimeData;
+    mimeData->setHtml(html);
+    mimeData->setText(rendered.toPlainText());
+    QGuiApplication::clipboard()->setMimeData(mimeData);
+    setStatus(QStringLiteral("Copied as HTML."));
+}
+
 QString Backend::clipboardUrl() const {
     const QClipboard *clipboard = QGuiApplication::clipboard();
     if (!clipboard)
