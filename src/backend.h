@@ -5,12 +5,14 @@
 #include <QByteArray>
 #include <QFileSystemWatcher>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 #include <memory>
 
 class MarkdownHighlighter;
+class QFont;
 class QTextDocument;
 class QWindow;
 class QLockFile;
@@ -28,6 +30,9 @@ class Backend : public QObject {
     Q_PROPERTY(QString themeForeground READ themeForeground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeSelection READ themeSelection NOTIFY themeColorsChanged)
+    Q_PROPERTY(QString themeSelectionForeground READ themeSelectionForeground NOTIFY themeColorsChanged)
+    Q_PROPERTY(QString editorFont READ editorFont WRITE setEditorFont NOTIFY editorFontChanged)
+    Q_PROPERTY(QStringList availableFonts READ availableFonts CONSTANT)
 
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -49,9 +54,16 @@ public:
     QString themeForeground() const { return m_themeForeground; }
     QString themeAccent() const { return m_themeAccent; }
     QString themeSelection() const { return m_themeSelection; }
+    QString themeSelectionForeground() const { return m_themeSelectionForeground; }
+    QString editorFont() const { return m_editorFont; }
+    void setEditorFont(const QString &family);
+    QStringList availableFonts() const;
+    static QString defaultEditorFont();
+    static QStringList selectableFontFamilies(const QStringList &families);
     static int countWords(const QString &text);
     static QString normalizedLinkUrl(const QString &clipboardText);
     static QString suggestedFileName(const QString &text);
+    static QFont printFont(const QFont &editorFont, qreal screenDpi);
 
     Q_INVOKABLE void attachDocument(QObject *textDocument);
     Q_INVOKABLE void openDialog();
@@ -71,10 +83,12 @@ public:
     Q_INVOKABLE QString clipboardText() const;
     Q_INVOKABLE bool editorTextChanged();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
+    Q_INVOKABLE int cursorPositionStep(int position, int direction) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
+    Q_INVOKABLE void documentFontChanged();
 
 signals:
     void fileUrlChanged();
@@ -84,6 +98,7 @@ signals:
     void darkModeChanged();
     void textScaleChanged();
     void themeColorsChanged();
+    void editorFontChanged();
     void closeAfterSave();
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
@@ -108,6 +123,7 @@ private:
     void restoreRecovery();
     void clearRecovery();
     QString recoveryPath() const;
+    void setKnownFileContents(const QByteArray &contents, bool known);
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
@@ -132,6 +148,7 @@ private:
     QPointer<MarkdownHighlighter> m_highlighter;
     QString m_lastDocumentText;
     QByteArray m_lastKnownFileContents;
+    QString m_lastKnownFileText;
     bool m_hasKnownFileContents = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
@@ -140,5 +157,7 @@ private:
     QString m_themeForeground;
     QString m_themeAccent;
     QString m_themeSelection;
+    QString m_themeSelectionForeground;
+    QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
 };

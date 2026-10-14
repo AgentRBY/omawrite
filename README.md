@@ -24,9 +24,14 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+K` insert bold, italic, and link Markdown.
 - `Ctrl+Shift+C` copies the rendered document as HTML, with plain text as a fallback.
 - `Ctrl+?` shows the keyboard shortcut reference.
+- In the unsaved-changes dialog, `Alt+C`, `Alt+D`, and `Alt+S` choose Cancel,
+  Discard, and Save.
 
 Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
 and warns before an external change can replace local work.
+
+The font button in the footer picks the writing font from any installed text font,
+and Omawrite remembers the choice. IBM Plex Mono is the default.
 
 Text follows the desktop text size — `omarchy display text size`, or GNOME's
 `text-scaling-factor` — and re-flows without a restart. The default of 12px leaves
@@ -37,6 +42,5 @@ Omawrite at the size it is designed around; larger and smaller sizes scale from 
 - Qt 6: `qt6-base`, `qt6-declarative`, `qt6-quickcontrols2`
 - `xdg-desktop-portal` and a portal backend
 
-The iA Writer Mono font is bundled under the SIL Open Font License 1.1; see
-`fonts/OFL.txt`. The font is copyright Information Architects Inc. and based on
-IBM Plex, copyright IBM Corp.
+The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
+`fonts/OFL.txt`. The font is copyright IBM Corp.
