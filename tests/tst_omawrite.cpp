@@ -4,6 +4,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QQuickWindow>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -229,6 +230,47 @@ private slots:
         QSignalSpy openDialogSpy(&backend, &Backend::openDialogRequested);
         QVERIFY(QMetaObject::invokeMethod(openButton, "clicked"));
         QCOMPARE(openDialogSpy.count(), 1);
+    }
+
+    void flashesScrollBarOnlyWhenPaging() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *linger = window->findChild<QObject *>(QStringLiteral("scrollLinger"));
+        QVERIFY(editor);
+        QVERIFY(linger);
+
+        QStringList lines;
+        for (int i = 0; i < 300; ++i)
+            lines << QStringLiteral("line %1").arg(i);
+        editor->setProperty("text", lines.join(QLatin1Char('\n')));
+        QVERIFY(QMetaObject::invokeMethod(editor, "forceActiveFocus"));
+        QTRY_VERIFY(editor->property("activeFocus").toBool());
+
+        // Writing past the bottom edge scrolls along, but leaves the bar hidden.
+        editor->setProperty("cursorPosition", editor->property("length").toInt());
+        QVERIFY(!linger->property("running").toBool());
+
+        QTest::keyClick(window, Qt::Key_PageUp);
+        QVERIFY(linger->property("running").toBool());
+
+        QMetaObject::invokeMethod(linger, "stop");
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QVERIFY(linger->property("running").toBool());
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
     }
 
     void scalesTextWithDesktopTextSize() {
