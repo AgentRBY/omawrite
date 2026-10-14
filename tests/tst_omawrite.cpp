@@ -193,7 +193,7 @@ private slots:
         QCOMPARE(openDialogSpy.count(), 1);
     }
 
-    void unsavedChangesDialogSupportsLetterShortcuts() {
+    void unsavedChangesDialogSupportsAltMnemonics() {
         const QString dialogQmlPath = QFINDTESTDATA("../src/UnsavedChangesDialog.qml");
         QVERIFY(!dialogQmlPath.isEmpty());
 
@@ -232,30 +232,39 @@ private slots:
         QSignalSpy discardSpy(dialog, SIGNAL(discardRequested()));
         QSignalSpy saveSpy(dialog, SIGNAL(saveRequested()));
 
+        // Bare letters and Ctrl chords do nothing, so a stray keypress
+        // while typing can never discard work.
         QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
         QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_C);
+        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_S);
         QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
         QCOMPARE(cancelSpy.count(), 0);
+        QCOMPARE(discardSpy.count(), 0);
+        QCOMPARE(saveSpy.count(), 0);
         QVERIFY(dialog->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_C);
+
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
         QTRY_COMPARE(cancelSpy.count(), 1);
         QVERIFY(!dialog->property("opened").toBool());
 
         QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
         QTRY_VERIFY(dialog->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
         QTRY_COMPARE(discardSpy.count(), 1);
         QVERIFY(!dialog->property("opened").toBool());
 
         QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
         QTRY_VERIFY(dialog->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_S);
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
         QTRY_COMPARE(saveSpy.count(), 1);
         QVERIFY(!dialog->property("opened").toBool());
 
-        QTest::keyClick(window, Qt::Key_C);
-        QTest::keyClick(window, Qt::Key_D);
-        QTest::keyClick(window, Qt::Key_S);
+        // With the dialog closed, the mnemonics are inert.
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
         QCOMPARE(cancelSpy.count(), 1);
         QCOMPARE(discardSpy.count(), 1);
         QCOMPARE(saveSpy.count(), 1);

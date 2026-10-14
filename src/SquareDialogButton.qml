@@ -21,7 +21,7 @@ Button {
 
     contentItem: Label {
         text: control.formattedText.length > 0 ? control.formattedText : control.text
-        textFormat: control.formattedText.length > 0 ? Text.RichText : Text.PlainText
+        textFormat: control.formattedText.length > 0 ? Text.StyledText : Text.PlainText
         color: control.labelColor
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

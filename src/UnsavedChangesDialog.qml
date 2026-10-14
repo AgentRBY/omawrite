@@ -29,19 +29,19 @@ Dialog {
     padding: 20
 
     Shortcut {
-        sequence: "C"
+        sequence: "Alt+C"
         enabled: root.opened
         onActivated: cancelButton.clicked()
     }
 
     Shortcut {
-        sequence: "D"
+        sequence: "Alt+D"
         enabled: root.opened
         onActivated: discardButton.clicked()
     }
 
     Shortcut {
-        sequence: "S"
+        sequence: "Alt+S"
         enabled: root.opened
         onActivated: saveButton.clicked()
     }
