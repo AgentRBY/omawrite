@@ -29,6 +29,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString themeForeground READ themeForeground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeSelection READ themeSelection NOTIFY themeColorsChanged)
+    Q_PROPERTY(QString themeSelectionForeground READ themeSelectionForeground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString editorFont READ editorFont WRITE setEditorFont NOTIFY editorFontChanged)
     Q_PROPERTY(QStringList availableFonts READ availableFonts CONSTANT)
 
@@ -52,6 +53,7 @@ public:
     QString themeForeground() const { return m_themeForeground; }
     QString themeAccent() const { return m_themeAccent; }
     QString themeSelection() const { return m_themeSelection; }
+    QString themeSelectionForeground() const { return m_themeSelectionForeground; }
     QString editorFont() const { return m_editorFont; }
     void setEditorFont(const QString &family);
     QStringList availableFonts() const;
@@ -149,6 +151,7 @@ private:
     QString m_themeForeground;
     QString m_themeAccent;
     QString m_themeSelection;
+    QString m_themeSelectionForeground;
     QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
 };

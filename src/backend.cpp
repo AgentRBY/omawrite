@@ -660,6 +660,10 @@ void Backend::loadOmarchyTheme() {
     const QString colorsPath = QDir::homePath()
         + QStringLiteral("/.local/state/omarchy/current/theme/colors.toml");
     QString themeMode;
+    QString selection;
+    QString selectionBackground;
+    QString selectionForeground;
+    QString brightForeground;
     QFile file(colorsPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
@@ -688,9 +692,27 @@ void Backend::loadOmarchyTheme() {
             else if (key == QStringLiteral("accent"))
                 m_themeAccent = value;
             else if (key == QStringLiteral("selection"))
-                m_themeSelection = value;
+                selection = value;
+            else if (key == QStringLiteral("selection_background"))
+                selectionBackground = value;
+            else if (key == QStringLiteral("selection_foreground"))
+                selectionForeground = value;
+            else if (key == QStringLiteral("bright_foreground"))
+                brightForeground = value;
         }
     }
+
+    if (!selection.isEmpty())
+        m_themeSelection = selection;
+    else if (!selectionBackground.isEmpty())
+        m_themeSelection = selectionBackground;
+
+    if (!selectionForeground.isEmpty())
+        m_themeSelectionForeground = selectionForeground;
+    else if (!brightForeground.isEmpty())
+        m_themeSelectionForeground = brightForeground;
+    else
+        m_themeSelectionForeground = m_themeForeground;
 
     bool themeModeKnown = false;
     bool themeIsDark = m_darkMode;
