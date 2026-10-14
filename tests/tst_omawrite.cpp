@@ -1,19 +1,49 @@
 #include <QtTest>
 #include <QFont>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextLayout>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
-#include <QQuickStyle>
 #include <QQuickWindow>
+#include <QQuickStyle>
+#include <QQuickTextDocument>
+#include <QStandardPaths>
 
 #include "backend.h"
 #include "markdownhighlighter.h"
+
+// Counts QML "Binding loop detected" warnings while it is alive, forwarding
+// everything to the previous handler so test output stays intact.
+class BindingLoopCounter {
+public:
+    BindingLoopCounter() {
+        s_count = 0;
+        m_previous = qInstallMessageHandler(handle);
+        s_previous = m_previous;
+    }
+    ~BindingLoopCounter() { qInstallMessageHandler(m_previous); }
+    int count() const { return s_count; }
+
+private:
+    static void handle(QtMsgType type, const QMessageLogContext &context, const QString &message) {
+        if (message.contains(QLatin1String("Binding loop detected")))
+            ++s_count;
+        if (s_previous)
+            s_previous(type, context, message);
+    }
+    static inline int s_count = 0;
+    static inline QtMessageHandler s_previous = nullptr;
+    QtMessageHandler m_previous = nullptr;
+};
 
 class OmawriteTest : public QObject {
     Q_OBJECT
 
 private slots:
     void initTestCase() {
+        QStandardPaths::setTestModeEnabled(true);
         QVERIFY(m_settingsDirectory.isValid());
         QQuickStyle::setStyle(QStringLiteral("Material"));
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -23,7 +53,16 @@ private slots:
 
     void countsWords() {
         QCOMPARE(Backend::countWords(QStringLiteral("one two-three don't 42")), 4);
-        QCOMPARE(Backend::countWords(QStringLiteral("你好 世界")), 2);
+        QCOMPARE(Backend::countWords(QStringLiteral("你好世界")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("你好 世界")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("中文 iPad AI")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("foo中bar")), 3);
+        QCOMPARE(Backend::countWords(QStringLiteral("日本語テスト")), 6);
+        QCOMPARE(Backend::countWords(QStringLiteral("你好，世界。")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("コーヒー")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("か\u3099")), 1); // が, decomposed
+        QCOMPARE(Backend::countWords(QStringLiteral("𠀀𠀁 foo")), 3);
+        QCOMPARE(Backend::countWords(QStringLiteral("안녕하세요 세계")), 2);
         QCOMPARE(Backend::countWords(QString()), 0);
     }
 
@@ -43,6 +82,19 @@ private slots:
         QCOMPARE(Backend::suggestedFileName(QString()), QStringLiteral("Untitled.md"));
         QCOMPARE(Backend::suggestedFileName(QStringLiteral("Already.md")),
                  QStringLiteral("Already.md"));
+    }
+
+    void printsInPointsNotPixels() {
+        QFont editorFont;
+        editorFont.setPixelSize(20);
+        const QFont printed = Backend::printFont(editorFont, 96.0);
+        QCOMPARE(printed.pixelSize(), -1);
+        QCOMPARE(printed.pointSizeF(), 15.0);
+        QCOMPARE(Backend::printFont(editorFont, 0.0).pointSizeF(), 15.0);
+
+        QFont pointFont;
+        pointFont.setPointSizeF(11.0);
+        QCOMPARE(Backend::printFont(pointFont, 144.0).pointSizeF(), 11.0);
     }
 
     void keepsNotoFromCrowdingTheFontList() {
@@ -94,6 +146,118 @@ private slots:
         QCOMPARE(markup.at(2).markers[0].length, 1);
     }
 
+    void ignoresInlineMarkdownInsideCodeSpans() {
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(
+                     QStringLiteral("`The_brown_fox` jumps")).size(), 0);
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(
+                     QStringLiteral("`a **b** [c](d)` and `e`")).size(), 0);
+
+        const auto mixed = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("`code_span` then *real* emphasis"));
+        QCOMPARE(mixed.size(), 1);
+        QCOMPARE(mixed.at(0).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(mixed.at(0).content.start, 18);
+    }
+
+    // A code span makes its own contents literal; it does not stop markup that
+    // merely encloses one. Only a delimiter landing inside the code span does.
+    void keepsMarkupThatEnclosesACodeSpan() {
+        const auto spanning = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("_a `b` c_"));
+        QCOMPARE(spanning.size(), 1);
+        QCOMPARE(spanning.at(0).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(spanning.at(0).content.start, 1);
+        QCOMPARE(spanning.at(0).content.length, 7);
+
+        const auto linked = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("[see `code`](url)"));
+        QCOMPARE(linked.size(), 1);
+        QCOMPARE(linked.at(0).kind, MarkdownHighlighter::InlineKind::Link);
+        QCOMPARE(linked.at(0).content.start, 1);
+        QCOMPARE(linked.at(0).content.length, 10);
+
+        const auto wrapped = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("*`code`*"));
+        QCOMPARE(wrapped.size(), 1);
+        QCOMPARE(wrapped.at(0).kind, MarkdownHighlighter::InlineKind::Italic);
+
+        const auto bold = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("**a `b` c**"));
+        QCOMPARE(bold.size(), 1);
+        QCOMPARE(bold.at(0).kind, MarkdownHighlighter::InlineKind::Bold);
+        QCOMPARE(bold.at(0).content.start, 2);
+        QCOMPARE(bold.at(0).content.length, 7);
+
+        // The closing underscore is inside the code span, so it is not a marker.
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(
+                     QStringLiteral("_a `b_ c` d_")).size(), 0);
+    }
+
+    // Emphasis may enclose a code span, so the code pass has to run last for the
+    // code span to keep its own styling.
+    void stylesAnEnclosedCodeSpanAsCode() {
+        QTextDocument document;
+        MarkdownHighlighter highlighter(&document);
+        document.setPlainText(QStringLiteral("_a `b` c_"));
+        // The constructor's own rehighlight is queued, so ask for one directly.
+        highlighter.rehighlight();
+
+        const QTextBlock block = document.firstBlock();
+        QVERIFY(block.isValid());
+        const auto formatAt = [&block](int index) {
+            QTextCharFormat found;
+            for (const QTextLayout::FormatRange &range : block.layout()->formats()) {
+                if (index >= range.start && index < range.start + range.length)
+                    found = range.format;
+            }
+            return found;
+        };
+
+        // "a" is italic and carries no code background.
+        QVERIFY(formatAt(1).fontItalic());
+        QCOMPARE(formatAt(1).background().style(), Qt::NoBrush);
+
+        // The code span keeps the code background and is not italicised.
+        QVERIFY(formatAt(4).background().style() != Qt::NoBrush);
+        QVERIFY(!formatAt(4).fontItalic());
+    }
+
+    // A stray asterisk next to whitespace is not an emphasis delimiter, so it
+    // must not swallow a bullet or the operands of arithmetic.
+    void keepsWhitespaceDelimitedAsterisksLiteral() {
+        // Only `*important*` is markup; the bullet stays a bullet.
+        const auto bullet = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("* first *important* point"));
+        QCOMPARE(bullet.size(), 1);
+        QCOMPARE(bullet.at(0).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(bullet.at(0).content.start, 9);
+        QCOMPARE(bullet.at(0).content.length, 9);
+        QCOMPARE(bullet.at(0).markers[0].start, 8);
+        QCOMPARE(bullet.at(0).markers[1].start, 18);
+
+        // Multiplication stays exactly as typed.
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(
+                     QStringLiteral("2 * 3 * 4")).size(), 0);
+
+        // Real emphasis is unaffected.
+        const auto shortWord = MarkdownHighlighter::inlineMarkup(QStringLiteral("*a*"));
+        QCOMPARE(shortWord.size(), 1);
+        QCOMPARE(shortWord.at(0).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(shortWord.at(0).content.start, 1);
+        QCOMPARE(shortWord.at(0).content.length, 1);
+
+        const auto longPhrase =
+            MarkdownHighlighter::inlineMarkup(QStringLiteral("*longer text*"));
+        QCOMPARE(longPhrase.size(), 1);
+        QCOMPARE(longPhrase.at(0).content.length, 11);
+
+        const auto mixed = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("**bold** and *italic*"));
+        QCOMPARE(mixed.size(), 2);
+        QCOMPARE(mixed.at(0).kind, MarkdownHighlighter::InlineKind::Bold);
+        QCOMPARE(mixed.at(1).kind, MarkdownHighlighter::InlineKind::Italic);
+    }
+
     void loadsCurrentOmarchyTheme() {
         QTemporaryDir homeDirectory;
         QVERIFY(homeDirectory.isValid());
@@ -115,6 +279,7 @@ private slots:
             "mode = \"light\"\n"
             "accent = \"#112233\"\n"
             "selection = \"#445566\"\n"
+            "selection_foreground = \"#fafafa\"\n"
             "background = \"#fefefe\"\n"
             "foreground = \"#101010\"\n");
         QCOMPARE(colorsFile.write(palette), qint64(palette.size()));
@@ -125,7 +290,72 @@ private slots:
         QCOMPARE(backend.themeForeground(), QStringLiteral("#101010"));
         QCOMPARE(backend.themeAccent(), QStringLiteral("#112233"));
         QCOMPARE(backend.themeSelection(), QStringLiteral("#445566"));
+        QCOMPARE(backend.themeSelectionForeground(), QStringLiteral("#fafafa"));
         QVERIFY(!backend.darkMode());
+
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QCOMPARE(editor->property("selectionColor").value<QColor>(), QColor("#445566"));
+        QCOMPARE(editor->property("selectedTextColor").value<QColor>(), QColor("#fafafa"));
+    }
+
+    void fallsBackForSelectionColors_data() {
+        QTest::addColumn<QByteArray>("palette");
+        QTest::addColumn<QString>("selection");
+        QTest::addColumn<QString>("selectionForeground");
+
+        QTest::newRow("bright_foreground")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "bright_foreground = \"#ffffff\"\n"
+                          "selection = \"#333333\"\n")
+            << QStringLiteral("#333333") << QStringLiteral("#ffffff");
+        QTest::newRow("foreground")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "selection = \"#333333\"\n")
+            << QStringLiteral("#333333") << QStringLiteral("#c0c0c0");
+        QTest::newRow("selection_background")
+            << QByteArray("foreground = \"#c0c0c0\"\n"
+                          "selection_background = \"#222222\"\n")
+            << QStringLiteral("#222222") << QStringLiteral("#c0c0c0");
+    }
+
+    void fallsBackForSelectionColors() {
+        QFETCH(QByteArray, palette);
+        QFETCH(QString, selection);
+        QFETCH(QString, selectionForeground);
+
+        QTemporaryDir homeDirectory;
+        QVERIFY(homeDirectory.isValid());
+
+        const QByteArray originalHome = qgetenv("HOME");
+        struct HomeRestorer {
+            QByteArray value;
+            ~HomeRestorer() { qputenv("HOME", value); }
+        } restoreHome{originalHome};
+        QVERIFY(qputenv("HOME", homeDirectory.path().toUtf8()));
+
+        const QString themeDirectory = homeDirectory.path()
+            + QStringLiteral("/.local/state/omarchy/current/theme");
+        QVERIFY(QDir().mkpath(themeDirectory));
+
+        QFile colorsFile(themeDirectory + QStringLiteral("/colors.toml"));
+        QVERIFY(colorsFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QCOMPARE(colorsFile.write(palette), qint64(palette.size()));
+        colorsFile.close();
+
+        Backend backend;
+        QCOMPARE(backend.themeSelection(), selection);
+        QCOMPARE(backend.themeSelectionForeground(), selectionForeground);
     }
 
     void ignoresFileWatcherEventsForSavedContents() {
@@ -202,6 +432,114 @@ private slots:
         QCOMPARE(editor->property("wrappedSelectionEnd").toInt(), 12);
     }
 
+    void stepsOverWholeCharactersWhenTypingAndSaving() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        const auto setText = [&](const QString &value) {
+            editor->setProperty("text", value);
+            editor->setProperty("cursorPosition", 0);
+        };
+        const auto move = [&](int direction) -> int {
+            const bool invoked = QMetaObject::invokeMethod(
+                editor, "moveCursorVisibly", Q_ARG(QVariant, direction));
+            return invoked ? editor->property("cursorPosition").toInt() : -1;
+        };
+
+        // Right steps over the whole emoji, so typing keeps it in the file.
+        setText(QStringLiteral("a😀b"));
+        editor->setProperty("cursorPosition", 1);
+        QCOMPARE(move(1), 3);
+        QVERIFY(QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 3),
+                                          Q_ARG(QString, QStringLiteral("x"))));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("a😀xb"));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString savedPath = directory.filePath(QStringLiteral("emoji.md"));
+        backend.saveAs(QUrl::fromLocalFile(savedPath));
+        QFile saved(savedPath);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(saved.readAll()), QStringLiteral("a😀xb"));
+
+        // Left steps back over the same cluster.
+        setText(QStringLiteral("a😀b"));
+        editor->setProperty("cursorPosition", 3);
+        QCOMPARE(move(-1), 1);
+
+        // Hidden Markdown markers are still skipped on both sides.
+        setText(QStringLiteral("**bold**"));
+        editor->setProperty("cursorPosition", 0);
+        QCOMPARE(move(1), 2);
+        editor->setProperty("cursorPosition", 8);
+        QCOMPARE(move(-1), 6);
+
+        // Hidden markers next to an emoji combine correctly.
+        setText(QStringLiteral("*😀*x"));
+        editor->setProperty("cursorPosition", 0);
+        QCOMPARE(move(1), 1);
+        QCOMPARE(move(1), 4);
+
+        // Paragraph separators still move one position at a time.
+        setText(QStringLiteral("ab\ncd"));
+        editor->setProperty("cursorPosition", 2);
+        QCOMPARE(move(1), 3);
+        QCOMPARE(move(-1), 2);
+    }
+
+    void stepsCursorByWholeGraphemeClusters() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        const auto step = [&](const QString &text, int from, int direction) {
+            editor->setProperty("text", text);
+            return backend.cursorPositionStep(from, direction);
+        };
+
+        // Qt 6 treats surrogate pairs, skin tone modifiers, ZWJ sequences,
+        // regional indicators and combining marks as single cursor steps.
+        QCOMPARE(step(QStringLiteral("a😀b"), 1, 1), 3);
+        QCOMPARE(step(QStringLiteral("a😀b"), 3, -1), 1);
+        QCOMPARE(step(QStringLiteral("a👍🏽b"), 1, 1), 5);
+        QCOMPARE(step(QStringLiteral("a👍🏽b"), 5, -1), 1);
+        QCOMPARE(step(QStringLiteral("a👨‍👩‍👧b"), 1, 1), 9);
+        QCOMPARE(step(QStringLiteral("a👨‍👩‍👧b"), 9, -1), 1);
+        QCOMPARE(step(QStringLiteral("a🇺🇸b"), 1, 1), 5);
+        QCOMPARE(step(QStringLiteral("a1\u20e3b"), 1, 1), 3);
+        QCOMPARE(step(QStringLiteral("ae\u0301b"), 1, 1), 3);
+
+        // Document limits and paragraph separators are handled explicitly.
+        QCOMPARE(step(QStringLiteral("a😀b"), 0, -1), 0);
+        QCOMPARE(step(QStringLiteral("a😀b"), 4, 1), 4);
+        QCOMPARE(step(QStringLiteral("ab\ncd"), 2, 1), 3);
+        QCOMPARE(step(QStringLiteral("ab\ncd"), 3, -1), 2);
+        QCOMPARE(step(QStringLiteral("ab\ncd"), 5, 1), 5);
+        QCOMPARE(step(QStringLiteral("😀\nb"), 2, 1), 3);
+        QCOMPARE(step(QStringLiteral("😀\nb"), 3, -1), 2);
+    }
+
     void savesAndOpensFromFooterButtons() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -233,6 +571,9 @@ private slots:
     }
 
     void flashesScrollBarOnlyWhenPaging() {
+    }
+
+    void breaksLinesOnReturn() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
 
@@ -243,6 +584,7 @@ private slots:
         QVERIFY2(component.isReady(), qPrintable(component.errorString()));
         QScopedPointer<QObject> object(component.create());
         QVERIFY2(object, qPrintable(component.errorString()));
+
         auto *window = qobject_cast<QQuickWindow *>(object.data());
         QVERIFY(window);
         window->show();
@@ -271,6 +613,290 @@ private slots:
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QVERIFY(linger->property("running").toBool());
         QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+
+        QVERIFY(editor);
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        QVERIFY(editor->property("activeFocus").toBool());
+
+        auto text = [&] { return editor->property("text").toString(); };
+        auto load = [&](const QString &content, int position) {
+            editor->setProperty("text", content);
+            editor->setProperty("cursorPosition", position);
+        };
+        auto returnKey = [&] { QTest::keyClick(window, Qt::Key_Return); };
+
+        // Ending a paragraph leaves the blank line that separates it from the
+        // next one.
+        load(QStringLiteral("one\n\ntwo"), 8);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo\n\n"));
+
+        // On a line that is already blank there is nothing to separate from,
+        // so Return is worth one line, not two.
+        load(QStringLiteral("one\n\ntwo"), 4);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\ntwo"));
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\n\ntwo"));
+
+        // An empty document is a blank line too.
+        load(QString(), 0);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("\n"));
+
+        // Whitespace left behind on a line still reads as blank.
+        load(QStringLiteral("one\n  \ntwo"), 5);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n \n \ntwo"));
+
+        // A selection dragged right to left leaves the caret on the blank line
+        // it began on, but the break lands on the line it leaves behind.
+        load(QStringLiteral("one\n\ntwo"), 7);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 4));
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\no"));
+
+        // A list carries its marker down, and an item left empty drops the
+        // marker to end the list.
+        load(QStringLiteral("- item"), 6);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("- item\n- "));
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("- item\n\n"));
+
+        // Inside a code fence every line is its own, blank ones included.
+        load(QStringLiteral("```\ncode\n```"), 8);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("```\ncode\n\n```"));
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("```\ncode\n\n\n```"));
+    }
+
+    void closesParagraphBreaksOnBackspace() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        QVERIFY(editor->property("activeFocus").toBool());
+
+        auto text = [&] { return editor->property("text").toString(); };
+        auto caret = [&] { return editor->property("cursorPosition").toInt(); };
+        auto load = [&](const QString &content, int position) {
+            editor->setProperty("text", content);
+            editor->setProperty("cursorPosition", position);
+        };
+        auto returnKey = [&] { QTest::keyClick(window, Qt::Key_Return); };
+        auto backspaceKey = [&] { QTest::keyClick(window, Qt::Key_Backspace); };
+
+        // Backspace at the head of a paragraph closes the whole break above
+        // it, so the two paragraphs join in one press rather than two, and
+        // the caret lands where they meet.
+        load(QStringLiteral("one\n\ntwo"), 5);
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("onetwo"));
+        QCOMPARE(caret(), 3);
+
+        // Ending a paragraph writes both breaks at once, and one Backspace
+        // takes both back. A Return on the blank line of "one\n\n\ntwo" can
+        // leave this very document with the caret in this very place, so it
+        // is not provenance that decides here: it is that the gap is left
+        // standing either way, and this is much the commoner press.
+        load(QStringLiteral("one\n\ntwo"), 3);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\n\ntwo"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo"));
+        QCOMPARE(caret(), 3);
+
+        // Which is what a Return inside a wide gap costs: the same rule reads
+        // this as the paragraph-ending press it cannot be told apart from, so
+        // the writer gets back one blank line fewer than they had. The gap
+        // still separates the paragraphs, and one more Return returns it.
+        load(QStringLiteral("one\n\n\n\ntwo"), 4);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\n\n\ntwo"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\ntwo"));
+        QCOMPARE(caret(), 3);
+
+        // Return on a blank line writes a single break, so Backspace must
+        // take back a single break too. Closing the pair behind the caret
+        // would swallow the separator that was there beforehand and leave
+        // the two paragraphs with nothing between them.
+        load(QStringLiteral("one\n\ntwo"), 4);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\ntwo"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo"));
+
+        // The same holds however far the gap has grown: each Return is worth
+        // one Backspace.
+        load(QStringLiteral("one\n\ntwo"), 4);
+        returnKey();
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n\n\ntwo"));
+        backspaceKey();
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo"));
+
+        // A line with nothing but spaces on it is a blank line, and Return
+        // above one writes a single break there too.
+        load(QStringLiteral("one\n  \ntwo"), 4);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n  \ntwo"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n  \ntwo"));
+
+        // On the blank line a document ends with, the two Returns leave the
+        // same text behind and no reading of it says which was pressed.
+        // Backspace takes one break, because taking two would carry off the
+        // line the document already ended with.
+        load(QStringLiteral("one\n"), 4);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\n"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n"));
+
+        // Which costs the paragraph that ends a document a second press,
+        // and that is the whole of what it costs: nothing is lost on the
+        // way through.
+        load(QStringLiteral("one\n\ntwo"), 8);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo\n\n"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo\n"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n\ntwo"));
+
+        // An empty document is a blank line, so it takes two Returns to open
+        // a gap and two Backspaces to close it again.
+        load(QString(), 0);
+        returnKey();
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("\n\n"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("\n"));
+        backspaceKey();
+        QCOMPARE(text(), QString());
+
+        // A document holding nothing but spaces is a blank line as well, and
+        // the spaces are text: they must still be there at the end of it.
+        load(QStringLiteral("   "), 3);
+        returnKey();
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("   \n\n"));
+        backspaceKey();
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("   "));
+
+        // Return at the very head of a document writes both breaks, since
+        // the paragraph below it is not blank, and one Backspace takes them.
+        load(QStringLiteral("two"), 0);
+        returnKey();
+        QCOMPARE(text(), QStringLiteral("\n\ntwo"));
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("two"));
+        QCOMPARE(caret(), 0);
+
+        // Spaces left on the line above a break do not make the break any
+        // less of one: Return between them and the paragraph below wrote
+        // both of these, so Backspace still takes both.
+        load(QStringLiteral("one\n  \n\ntwo"), 8);
+        backspaceKey();
+        QCOMPARE(text(), QStringLiteral("one\n  two"));
+        QCOMPARE(caret(), 6);
+    }
+
+    void unsavedChangesDialogSupportsAltMnemonics() {
+        const QString dialogQmlPath = QFINDTESTDATA("../src/UnsavedChangesDialog.qml");
+        QVERIFY(!dialogQmlPath.isEmpty());
+
+        QQmlEngine engine;
+        engine.addImportPath(QFileInfo(dialogQmlPath).absolutePath());
+        QQmlComponent component(&engine);
+        const QByteArray harness = R"QML(
+            import QtQuick
+            import QtQuick.Controls
+
+            ApplicationWindow {
+                width: 640
+                height: 420
+                visible: true
+
+                UnsavedChangesDialog {
+                    id: dialog
+                    objectName: "unsavedChangesDialog"
+                    containerWidth: parent.width
+                    containerHeight: parent.height
+                }
+            }
+        )QML";
+        component.setData(harness, QUrl::fromLocalFile(
+            QFileInfo(dialogQmlPath).absolutePath() + QStringLiteral("/ShortcutHarness.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(root.data());
+        QVERIFY(window);
+        QObject *dialog = root->findChild<QObject *>(QStringLiteral("unsavedChangesDialog"));
+        QVERIFY(dialog);
+
+        QSignalSpy cancelSpy(dialog, SIGNAL(cancelRequested()));
+        QSignalSpy discardSpy(dialog, SIGNAL(discardRequested()));
+        QSignalSpy saveSpy(dialog, SIGNAL(saveRequested()));
+
+        // Bare letters and Ctrl chords do nothing, so a stray keypress
+        // while typing can never discard work.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_C);
+        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_S);
+        QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
+        QCOMPARE(cancelSpy.count(), 0);
+        QCOMPARE(discardSpy.count(), 0);
+        QCOMPARE(saveSpy.count(), 0);
+        QVERIFY(dialog->property("opened").toBool());
+
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
+        QTRY_COMPARE(cancelSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
+        QTRY_COMPARE(discardSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
+        QTRY_COMPARE(saveSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        // With the dialog closed, the mnemonics are inert.
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
+        QCOMPARE(cancelSpy.count(), 1);
+        QCOMPARE(discardSpy.count(), 1);
+        QCOMPARE(saveSpy.count(), 1);
     }
 
     void scalesTextWithDesktopTextSize() {
@@ -297,6 +923,32 @@ private slots:
         backend.setTextScale(9.0 / 12.0);
         QCOMPARE(window->property("editorFontPixelSize").toInt(), 15);
         QCOMPARE(editor->property("font").value<QFont>().pixelSize(), 15);
+    }
+
+    void shortcutsDialogHasNoBindingLoop() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        // Material's Dialog derives implicitWidth from its content item; a bare
+        // Label assigned as contentItem feeds back into that binding and QML
+        // reports a binding loop for the dialog on every launch.
+        BindingLoopCounter bindingLoops;
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *dialog = window->findChild<QObject *>(QStringLiteral("shortcutsDialog"));
+        QVERIFY(dialog);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QCOMPARE(dialog->property("implicitWidth").toReal() > 0, true);
+
+        QCOMPARE(bindingLoops.count(), 0);
     }
 
     void remembersLastSaveDirectory() {
@@ -327,7 +979,112 @@ private slots:
         QCOMPARE(QFileInfo(fallbackUrl.toLocalFile()).absolutePath(), QDir::homePath());
     }
 
+    void revertsEmptyDocumentToCleanState() {
+        Backend backend;
+        QQuickTextDocument *quickDocument = attachTextEdit(&backend);
+        QVERIFY(quickDocument);
+
+        QVERIFY(!backend.modified());
+
+        quickDocument->textDocument()->setPlainText(QStringLiteral("hello"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+
+        quickDocument->textDocument()->setPlainText(QString());
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(!backend.modified());
+    }
+
+    void revertsSavedDocumentToCleanState() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        const QString path = directory.filePath(QStringLiteral("doc.md"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QCOMPARE(file.write("hello"), qint64(5));
+        file.close();
+
+        Backend backend;
+        QQuickTextDocument *quickDocument = attachTextEdit(&backend);
+        QVERIFY(quickDocument);
+
+        backend.open(QUrl::fromLocalFile(path));
+        QVERIFY(!backend.modified());
+
+        quickDocument->textDocument()->setPlainText(QStringLiteral("hello world"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+
+        quickDocument->textDocument()->setPlainText(QStringLiteral("hello"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(!backend.modified());
+    }
+
+    void keepsADocumentUnsavedAfterItsFileDisappears() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        const QString path = directory.filePath(QStringLiteral("gone.md"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QCOMPARE(file.write("hello"), qint64(5));
+        file.close();
+
+        Backend backend;
+        QQuickTextDocument *quickDocument = attachTextEdit(&backend);
+        QVERIFY(quickDocument);
+
+        QSignalSpy externalChangeSpy(&backend, &Backend::externalChangeDetected);
+        backend.open(QUrl::fromLocalFile(path));
+        QVERIFY(!backend.modified());
+
+        QVERIFY(QFile::remove(path));
+        QTRY_COMPARE(externalChangeSpy.count(), 1);
+
+        // The writer can dismiss the dialog without picking a version, so the
+        // text the deleted file used to hold is not a saved state to return to.
+        quickDocument->textDocument()->setPlainText(QStringLiteral("hello world"));
+        QVERIFY(backend.editorTextChanged());
+        quickDocument->textDocument()->setPlainText(QStringLiteral("hello"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+
+        // Nor is emptying it: an empty document only reads as clean while there
+        // is no file behind it.
+        quickDocument->textDocument()->setPlainText(QString());
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+    }
+
 private:
+    // Loads a bare TextEdit, attaches its document to the backend, and returns
+    // the QQuickTextDocument. The engine and TextEdit are parented to the
+    // backend so they outlive the helper call.
+    QQuickTextDocument *attachTextEdit(Backend *backend) {
+        auto *engine = new QQmlEngine(backend);
+        auto *component = new QQmlComponent(engine);
+        component->setData(R"QML(
+            import QtQuick
+            TextEdit { }
+        )QML", QUrl::fromLocalFile(QStringLiteral("Harness.qml")));
+        if (!component->isReady())
+            return nullptr;
+
+        QObject *editor = component->create();
+        if (!editor)
+            return nullptr;
+        editor->setParent(backend);
+
+        auto *quickDocument = qobject_cast<QQuickTextDocument *>(
+            editor->property("textDocument").value<QObject *>());
+        if (!quickDocument)
+            return nullptr;
+
+        backend->attachDocument(quickDocument);
+        return quickDocument;
+    }
+
     QTemporaryDir m_settingsDirectory;
 };
 
