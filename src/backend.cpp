@@ -117,6 +117,7 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                     }
                 }
 
+                suspendAutoSave();
                 emit externalChangeDetected(deleted, m_modified);
             });
 
@@ -219,6 +220,7 @@ void Backend::open(const QUrl &url) {
     clearRecovery();
     m_lastKnownFileContents = contents;
     m_hasKnownFileContents = true;
+    m_autoSaveSuspended = false;
     setFileUrl(url);
     watchCurrentFile();
     setModified(false);
@@ -270,12 +272,17 @@ void Backend::keepExternalVersion() {
     if (file.open(QIODevice::ReadOnly)) {
         m_lastKnownFileContents = file.readAll();
         m_hasKnownFileContents = true;
+        // Keeping our text over an edited file is a deliberate choice to
+        // overwrite it, so auto-save may resume. A removed file stays removed
+        // until the writer saves it again.
+        m_autoSaveSuspended = false;
     } else {
         m_lastKnownFileContents.clear();
         m_hasKnownFileContents = false;
     }
     setModified(true);
     scheduleRecovery();
+    scheduleAutoSave();
     watchCurrentFile();
     setStatus(QStringLiteral("Kept your version"));
 }
@@ -504,6 +511,8 @@ void Backend::saveTo(const QUrl &url) {
     m_closeAfterSave = false;
     m_lastKnownFileContents = contents;
     m_hasKnownFileContents = true;
+    m_autoSaveSuspended = false;
+    m_autoSaveTimer.stop();
     setFileUrl(url);
     watchCurrentFile();
     QSettings().setValue(lastSaveDirectorySetting,
@@ -525,13 +534,42 @@ void Backend::scheduleAutoSave() {
     // Only auto-save documents that already live on disk. Untitled drafts are
     // left to manual save so auto-save never silently opens a file picker or
     // creates a file the writer did not name; crash recovery still covers them.
-    if (m_fileUrl.isLocalFile())
+    if (m_fileUrl.isLocalFile() && !m_autoSaveSuspended)
         m_autoSaveTimer.start();
 }
 
 void Backend::autoSave() {
-    if (m_modified && m_fileUrl.isLocalFile())
-        saveTo(m_fileUrl);
+    if (!m_modified || !m_fileUrl.isLocalFile() || m_autoSaveSuspended)
+        return;
+
+    // Never write over a version we have not seen. The watcher normally
+    // catches outside edits first, but it can miss some (or fire late), so
+    // check the file itself right before replacing it.
+    QFile file(m_fileUrl.toLocalFile());
+    const bool exists = file.exists();
+    if (!m_hasKnownFileContents) {
+        // A removed file, or a recovered draft whose file was gone, waits for
+        // an explicit save rather than being silently recreated.
+        suspendAutoSave();
+        if (exists)
+            emit externalChangeDetected(false, m_modified);
+        return;
+    }
+    if (!exists || !file.open(QIODevice::ReadOnly)
+            || file.readAll() != m_lastKnownFileContents) {
+        suspendAutoSave();
+        emit externalChangeDetected(!exists, m_modified);
+        return;
+    }
+    file.close();
+
+    saveTo(m_fileUrl);
+}
+
+void Backend::suspendAutoSave() {
+    // Held until the writer reloads, keeps their version, or saves explicitly.
+    m_autoSaveTimer.stop();
+    m_autoSaveSuspended = true;
 }
 
 QString Backend::recoveryPath() const {
@@ -573,6 +611,10 @@ void Backend::restoreRecovery() {
         m_hasKnownFileContents = false;
     }
     setFileUrl(recoveredUrl);
+    // The file may have moved on since this draft was written, and the draft
+    // alone cannot tell. Leave overwriting it to an explicit save.
+    m_autoSaveSuspended = recoveredUrl.isLocalFile();
+    watchCurrentFile();
     setModified(true);
     setStatus(QStringLiteral("Recovered unsaved changes"));
 }

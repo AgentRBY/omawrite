@@ -90,6 +90,8 @@ signals:
     void externalChangeDetected(bool deleted, bool locallyModified);
 
 private:
+    friend class OmawriteTest;
+
     void loadDocumentText(const QString &text);
     void setFileUrl(const QUrl &url);
     void setModified(bool modified);
@@ -106,6 +108,7 @@ private:
     void writeRecovery();
     void scheduleAutoSave();
     void autoSave();
+    void suspendAutoSave();
     void restoreRecovery();
     void clearRecovery();
     QString recoveryPath() const;
@@ -135,6 +138,7 @@ private:
     QString m_lastDocumentText;
     QByteArray m_lastKnownFileContents;
     bool m_hasKnownFileContents = false;
+    bool m_autoSaveSuspended = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
 
