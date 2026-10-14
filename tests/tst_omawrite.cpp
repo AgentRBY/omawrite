@@ -393,6 +393,48 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("theirs, edited"));
     }
 
+    void autoSavesFilesWithWindowsLineEndings() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("crlf.md"));
+        writeFile(path, "one\r\ntwo\r\n");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.open(QUrl::fromLocalFile(path));
+        QSignalSpy externalChangeSpy(&backend, &Backend::externalChangeDetected);
+
+        editor->setProperty("text", QStringLiteral("one\ntwo\nthree\n"));
+        QVERIFY(backend.editorTextChanged());
+        QTRY_VERIFY(!backend.modified());
+        QCOMPARE(externalChangeSpy.count(), 0);
+    }
+
+    void holdsAutoSaveWhileTheWriterDecides() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("deciding.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.saveAs(QUrl::fromLocalFile(path));
+        QSignalSpy savedSpy(&backend, &Backend::saveSucceeded);
+
+        // Closing right after typing opens the unsaved-changes prompt.
+        editor->setProperty("text", QStringLiteral("undecided"));
+        QVERIFY(backend.editorTextChanged());
+        backend.holdAutoSave(true);
+        QTest::qWait(1200);
+        QCOMPARE(savedSpy.count(), 0);
+        QCOMPARE(readFile(path), QByteArray());
+
+        // Cancel lets auto-save carry on.
+        backend.holdAutoSave(false);
+        QTRY_COMPARE(readFile(path), QByteArray("undecided"));
+    }
+
     void doesNotAutoSaveARecoveredDraftOverItsFile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

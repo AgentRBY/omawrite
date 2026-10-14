@@ -108,7 +108,7 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                 const bool deleted = !QFileInfo::exists(path);
                 if (!deleted && m_hasKnownFileContents) {
                     QFile file(path);
-                    if (file.open(QIODevice::ReadOnly)
+                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)
                             && file.readAll() == m_lastKnownFileContents) {
                         // Atomic saves can replace the watched inode. Re-arm the
                         // watcher, but do not report our own save as an outside edit.
@@ -269,7 +269,7 @@ void Backend::reloadFromDisk() {
 
 void Backend::keepExternalVersion() {
     QFile file(m_fileUrl.toLocalFile());
-    if (file.open(QIODevice::ReadOnly)) {
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         m_lastKnownFileContents = file.readAll();
         m_hasKnownFileContents = true;
         // Keeping our text over an edited file is a deliberate choice to
@@ -534,12 +534,20 @@ void Backend::scheduleAutoSave() {
     // Only auto-save documents that already live on disk. Untitled drafts are
     // left to manual save so auto-save never silently opens a file picker or
     // creates a file the writer did not name; crash recovery still covers them.
-    if (m_fileUrl.isLocalFile() && !m_autoSaveSuspended)
+    if (m_fileUrl.isLocalFile() && !m_autoSaveSuspended && !m_autoSaveHeld)
         m_autoSaveTimer.start();
 }
 
+void Backend::holdAutoSave(bool held) {
+    m_autoSaveHeld = held;
+    if (held)
+        m_autoSaveTimer.stop();
+    else if (m_modified)
+        scheduleAutoSave();
+}
+
 void Backend::autoSave() {
-    if (!m_modified || !m_fileUrl.isLocalFile() || m_autoSaveSuspended)
+    if (!m_modified || !m_fileUrl.isLocalFile() || m_autoSaveSuspended || m_autoSaveHeld)
         return;
 
     // Never write over a version we have not seen. The watcher normally
@@ -555,7 +563,8 @@ void Backend::autoSave() {
             emit externalChangeDetected(false, m_modified);
         return;
     }
-    if (!exists || !file.open(QIODevice::ReadOnly)
+    // Read as open() does, so CRLF files compare equal to what we loaded.
+    if (!exists || !file.open(QIODevice::ReadOnly | QIODevice::Text)
             || file.readAll() != m_lastKnownFileContents) {
         suspendAutoSave();
         emit externalChangeDetected(!exists, m_modified);
@@ -603,7 +612,7 @@ void Backend::restoreRecovery() {
     loadDocumentText(recovery.value(QStringLiteral("text")).toString());
     const QUrl recoveredUrl(recovery.value(QStringLiteral("fileUrl")).toString());
     QFile diskFile(recoveredUrl.toLocalFile());
-    if (recoveredUrl.isLocalFile() && diskFile.open(QIODevice::ReadOnly)) {
+    if (recoveredUrl.isLocalFile() && diskFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         m_lastKnownFileContents = diskFile.readAll();
         m_hasKnownFileContents = true;
     } else {

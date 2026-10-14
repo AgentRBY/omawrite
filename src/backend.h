@@ -64,6 +64,7 @@ public:
     Q_INVOKABLE void discardRecovery();
     Q_INVOKABLE void reloadFromDisk();
     Q_INVOKABLE void keepExternalVersion();
+    Q_INVOKABLE void holdAutoSave(bool held);
     Q_INVOKABLE void printDocument();
     Q_INVOKABLE void newWindow();
     Q_INVOKABLE QString clipboardUrl() const;
@@ -139,6 +140,7 @@ private:
     QByteArray m_lastKnownFileContents;
     bool m_hasKnownFileContents = false;
     bool m_autoSaveSuspended = false;
+    bool m_autoSaveHeld = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
 
