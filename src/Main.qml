@@ -367,8 +367,12 @@ ApplicationWindow {
                 active: hovered || pressed || wheelScroll.running || scrollLinger.running
             }
 
+            // Also lingers after paging through the document from the
+            // keyboard, so the bar shows where the jump landed. Writing past
+            // the bottom edge scrolls too, but leaves the bar hidden.
             Timer {
                 id: scrollLinger
+                objectName: "scrollLinger"
                 interval: 600
             }
 
@@ -803,6 +807,12 @@ ApplicationWindow {
                         event.accepted = true;
                         return;
                     }
+
+                    var pageKey = event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp;
+                    var documentEdgeKey = (event.key === Qt.Key_Home || event.key === Qt.Key_End)
+                        && (event.modifiers & Qt.ControlModifier);
+                    if (pageKey || documentEdgeKey)
+                        scrollLinger.restart();
 
                     var returnKey = event.key === Qt.Key_Return || event.key === Qt.Key_Enter;
                     var commandModifier = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier);
