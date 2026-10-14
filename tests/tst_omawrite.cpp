@@ -6,6 +6,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickWindow>
 #include <QQuickStyle>
 #include <QQuickTextDocument>
 #include <QStandardPaths>
@@ -568,6 +569,83 @@ private slots:
         QSignalSpy openDialogSpy(&backend, &Backend::openDialogRequested);
         QVERIFY(QMetaObject::invokeMethod(openButton, "clicked"));
         QCOMPARE(openDialogSpy.count(), 1);
+    }
+
+    void unsavedChangesDialogSupportsAltMnemonics() {
+        const QString dialogQmlPath = QFINDTESTDATA("../src/UnsavedChangesDialog.qml");
+        QVERIFY(!dialogQmlPath.isEmpty());
+
+        QQmlEngine engine;
+        engine.addImportPath(QFileInfo(dialogQmlPath).absolutePath());
+        QQmlComponent component(&engine);
+        const QByteArray harness = R"QML(
+            import QtQuick
+            import QtQuick.Controls
+
+            ApplicationWindow {
+                width: 640
+                height: 420
+                visible: true
+
+                UnsavedChangesDialog {
+                    id: dialog
+                    objectName: "unsavedChangesDialog"
+                    containerWidth: parent.width
+                    containerHeight: parent.height
+                }
+            }
+        )QML";
+        component.setData(harness, QUrl::fromLocalFile(
+            QFileInfo(dialogQmlPath).absolutePath() + QStringLiteral("/ShortcutHarness.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(root.data());
+        QVERIFY(window);
+        QObject *dialog = root->findChild<QObject *>(QStringLiteral("unsavedChangesDialog"));
+        QVERIFY(dialog);
+
+        QSignalSpy cancelSpy(dialog, SIGNAL(cancelRequested()));
+        QSignalSpy discardSpy(dialog, SIGNAL(discardRequested()));
+        QSignalSpy saveSpy(dialog, SIGNAL(saveRequested()));
+
+        // Bare letters and Ctrl chords do nothing, so a stray keypress
+        // while typing can never discard work.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_C);
+        QTest::keyClick(window, Qt::Key_D);
+        QTest::keyClick(window, Qt::Key_S);
+        QTest::keyClick(window, Qt::Key_C, Qt::ControlModifier);
+        QCOMPARE(cancelSpy.count(), 0);
+        QCOMPARE(discardSpy.count(), 0);
+        QCOMPARE(saveSpy.count(), 0);
+        QVERIFY(dialog->property("opened").toBool());
+
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
+        QTRY_COMPARE(cancelSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
+        QTRY_COMPARE(discardSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
+        QTRY_COMPARE(saveSpy.count(), 1);
+        QVERIFY(!dialog->property("opened").toBool());
+
+        // With the dialog closed, the mnemonics are inert.
+        QTest::keyClick(window, Qt::Key_C, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_D, Qt::AltModifier);
+        QTest::keyClick(window, Qt::Key_S, Qt::AltModifier);
+        QCOMPARE(cancelSpy.count(), 1);
+        QCOMPARE(discardSpy.count(), 1);
+        QCOMPARE(saveSpy.count(), 1);
     }
 
     void scalesTextWithDesktopTextSize() {
