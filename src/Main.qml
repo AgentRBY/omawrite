@@ -304,7 +304,7 @@ ApplicationWindow {
 
         // Discard must still mean discard, so nothing is auto-saved while
         // the writer decides.
-        onOpened: backend.holdAutoSave(true)
+        onAboutToShow: backend.holdAutoSave(true)
         onClosed: backend.holdAutoSave(false)
 
         onDiscardRequested: {
