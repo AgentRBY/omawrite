@@ -5,6 +5,7 @@
 #include <QByteArray>
 #include <QFileSystemWatcher>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -28,6 +29,8 @@ class Backend : public QObject {
     Q_PROPERTY(QString themeForeground READ themeForeground NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeColorsChanged)
     Q_PROPERTY(QString themeSelection READ themeSelection NOTIFY themeColorsChanged)
+    Q_PROPERTY(QString editorFont READ editorFont WRITE setEditorFont NOTIFY editorFontChanged)
+    Q_PROPERTY(QStringList availableFonts READ availableFonts CONSTANT)
 
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -49,6 +52,11 @@ public:
     QString themeForeground() const { return m_themeForeground; }
     QString themeAccent() const { return m_themeAccent; }
     QString themeSelection() const { return m_themeSelection; }
+    QString editorFont() const { return m_editorFont; }
+    void setEditorFont(const QString &family);
+    QStringList availableFonts() const;
+    static QString defaultEditorFont();
+    static QStringList selectableFontFamilies(const QStringList &families);
     static int countWords(const QString &text);
     static QString normalizedLinkUrl(const QString &clipboardText);
     static QString suggestedFileName(const QString &text);
@@ -74,6 +82,7 @@ public:
     Q_INVOKABLE void openExternalUrl(const QUrl &url);
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
+    Q_INVOKABLE void documentFontChanged();
 
 signals:
     void fileUrlChanged();
@@ -83,6 +92,7 @@ signals:
     void darkModeChanged();
     void textScaleChanged();
     void themeColorsChanged();
+    void editorFontChanged();
     void closeAfterSave();
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
@@ -139,5 +149,6 @@ private:
     QString m_themeForeground;
     QString m_themeAccent;
     QString m_themeSelection;
+    QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
 };

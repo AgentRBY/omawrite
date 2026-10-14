@@ -26,6 +26,7 @@ ApplicationWindow {
     // the app at the sizes it was designed around.
     readonly property real textScale: backend.textScale
     readonly property int editorFontPixelSize: scaledSize(20)
+    readonly property int footerHeight: scaledSize(32)
     readonly property int editorWidth: Math.min(
         Math.round(writerFontMetrics.averageCharacterWidth * 65),
         Math.max(360, width - Math.round(writerFontMetrics.averageCharacterWidth * 20)))
@@ -76,7 +77,7 @@ ApplicationWindow {
 
     FontMetrics {
         id: writerFontMetrics
-        font.family: "iA Writer Mono S"
+        font.family: backend.editorFont
         font.pixelSize: win.editorFontPixelSize
     }
 
@@ -344,6 +345,11 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.leftMargin: 24
             anchors.rightMargin: 24
+            // Inset the scrolling area by the footer strip at both ends, so
+            // scrolled text never runs under the footer buttons, status, or
+            // word count, and stops just as far short of the top edge.
+            anchors.topMargin: win.footerHeight
+            anchors.bottomMargin: win.footerHeight
             clip: true
             contentWidth: width
             contentHeight: Math.max(height, editor.y + editor.implicitHeight + 220)
@@ -354,12 +360,6 @@ ApplicationWindow {
                 // flicking the Flickable, so the bar has to be told about
                 // that activity; linger briefly after the last event.
                 active: hovered || pressed || wheelScroll.running || scrollLinger.running
-                // Stop above the footer strip so the bar doesn't overlap
-                // the word count in the bottom-right corner. Padding and
-                // inset, not anchors: the attached-ScrollBar layout overrides
-                // anchors. Padding stops the thumb, the inset the track.
-                bottomPadding: win.scaledSize(32)
-                bottomInset: win.scaledSize(32)
             }
 
             // Also lingers after paging through the document from the
@@ -537,7 +537,9 @@ ApplicationWindow {
                 id: editor
                 objectName: "sourceEditor"
                 x: Math.round((editorFlick.width - width) / 2)
-                y: Math.max(42, Math.round(win.height * 0.05))
+                // The resting position counts from the window's top edge, so
+                // take back the top inset the Flickable already adds.
+                y: Math.max(0, Math.max(42, Math.round(win.height * 0.05)) - win.footerHeight)
                 width: win.editorWidth
                 height: Math.max(editorFlick.height - y - 96, implicitHeight + 20)
                 text: ""
@@ -549,7 +551,7 @@ ApplicationWindow {
                 color: win.textColor
                 selectedTextColor: win.strongTextColor
                 selectionColor: win.selectionFill
-                font.family: "iA Writer Mono S"
+                font.family: backend.editorFont
                 font.pixelSize: win.editorFontPixelSize
                 font.weight: Font.Normal
                 // Native rendering hints glyphs to the pixel grid, which is
@@ -563,6 +565,7 @@ ApplicationWindow {
                     color: win.strongTextColor
                 }
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
+                onFontChanged: backend.documentFontChanged()
 
                 function replaceSelectionWith(replacement) {
                     var start = Math.min(selectionStart, selectionEnd);
@@ -831,10 +834,19 @@ ApplicationWindow {
                 onClicked: backend.openDialog()
             }
 
+            FooterIconButton {
+                id: fontButton
+                objectName: "fontButton"
+                iconName: "font"
+                iconColor: win.mutedColor
+                tooltip: "Font"
+                onClicked: fontPicker.opened ? fontPicker.close() : fontPicker.open()
+            }
+
             Label {
                 text: backend.status
                 color: win.mutedColor
-                font.family: "iA Writer Mono S"
+                font.family: "IBM Plex Mono"
                 font.pixelSize: win.scaledSize(11)
                 visible: text !== ""
                 elide: Text.ElideRight
@@ -842,6 +854,25 @@ ApplicationWindow {
                 height: win.scaledSize(16)
                 verticalAlignment: Text.AlignVCenter
             }
+        }
+
+        FontPicker {
+            id: fontPicker
+            objectName: "fontPicker"
+            x: footerStatus.x + fontButton.x - 8
+            y: footerStatus.y - height - 10
+            width: win.scaledSize(320)
+            maximumHeight: Math.min(win.scaledSize(440), win.height - 80)
+            fonts: backend.availableFonts
+            currentFont: backend.editorFont
+            defaultFont: "IBM Plex Mono"
+            darkMode: win.darkMode
+            textScale: win.textScale
+            textColor: win.textColor
+            mutedColor: win.mutedColor
+            highlightColor: backend.themeAccent
+            onFontChosen: function(family) { backend.editorFont = family; }
+            onClosed: editor.forceActiveFocus()
         }
 
         Label {
@@ -852,7 +883,7 @@ ApplicationWindow {
             text: backend.wordCount + (backend.wordCount === 1 ? " Word" : " Words")
             color: win.mutedColor
             opacity: 0.75
-            font.family: "iA Writer Mono S"
+            font.family: "IBM Plex Mono"
             font.pixelSize: win.scaledSize(11)
         }
 
