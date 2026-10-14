@@ -307,13 +307,14 @@ void Backend::newWindow() {
 
 void Backend::copyAsHtml() {
     QTextDocument rendered;
-    if (m_document)
-        rendered.setDefaultFont(m_document->defaultFont());
     rendered.setMarkdown(currentDocumentText());
 
+    // Drop Qt's fixed fonts and margins from the body and blocks, so the pasted
+    // text takes on the destination's own typeface and paragraph spacing.
     QString html = rendered.toHtml();
-    static const QRegularExpression paragraphTag(QStringLiteral("<p(?:\\s+[^>]*)?>"));
-    html.replace(paragraphTag, QStringLiteral("<p style=\"margin: 0;\">"));
+    static const QRegularExpression blockStyle(
+        QStringLiteral("<(body|p|h[1-6]|ul|ol|li)\\s+style=\"[^\"]*\""));
+    html.replace(blockStyle, QStringLiteral("<\\1"));
 
     auto *mimeData = new QMimeData;
     mimeData->setHtml(html);

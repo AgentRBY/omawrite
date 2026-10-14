@@ -1,4 +1,6 @@
 #include <QtTest>
+#include <QClipboard>
+#include <QMimeData>
 #include <QFont>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -190,6 +192,36 @@ private slots:
         QSignalSpy openDialogSpy(&backend, &Backend::openDialogRequested);
         QVERIFY(QMetaObject::invokeMethod(openButton, "clicked"));
         QCOMPARE(openDialogSpy.count(), 1);
+    }
+
+    void copiesRenderedHtml() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("# Title\n\nFirst **bold**.\n\nSecond."));
+        backend.copyAsHtml();
+
+        const QMimeData *mimeData = QGuiApplication::clipboard()->mimeData();
+        QVERIFY(mimeData);
+        QVERIFY(mimeData->hasHtml());
+        const QString html = mimeData->html();
+        QVERIFY(html.contains(QStringLiteral("<h1>")));
+        QVERIFY(html.contains(QStringLiteral("<p>First ")));
+        QVERIFY(html.contains(QStringLiteral("<body>")));
+        QVERIFY(html.contains(QStringLiteral("font-weight:700;\">bold</span>")));
+        QVERIFY(!html.contains(QStringLiteral("font-family")));
+        QVERIFY(!html.contains(QStringLiteral("margin")));
+        QCOMPARE(mimeData->text(), QStringLiteral("Title\nFirst bold.\nSecond."));
     }
 
     void scalesTextWithDesktopTextSize() {
