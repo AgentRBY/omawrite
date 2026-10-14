@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QMimeData>
@@ -24,6 +25,7 @@
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextLayout>
 #include <QTextStream>
 #include <QUrl>
 #include <QVariantMap>
@@ -43,6 +45,26 @@ const QString textZoomSetting = QStringLiteral("text/zoom");
 // well at, so Ctrl+wheel here steps like Ctrl+wheel in a browser.
 constexpr qreal textZoomSteps[] = {0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0};
 constexpr int textZoomStepCount = int(std::size(textZoomSteps));
+
+const QString editorFontSetting = QStringLiteral("editor/font");
+
+// Noto ships a separate family per script, which buries every other font in
+// the picker. Offer only the core Latin families; the rest still serve as
+// fallbacks for whatever scripts a document contains.
+const QStringList keptNotoFamilies = {QStringLiteral("Noto Sans"),
+                                      QStringLiteral("Noto Sans Mono"),
+                                      QStringLiteral("Noto Serif")};
+
+// Fontconfig's generic aliases just point at another listed family.
+const QStringList genericFontAliases = {QStringLiteral("Monospace"), QStringLiteral("Mono"),
+                                        QStringLiteral("Sans Serif"), QStringLiteral("Sans"),
+                                        QStringLiteral("Serif"), QStringLiteral("System-ui")};
+
+// Symbol fonts often claim Latin coverage because they map their glyphs onto
+// ASCII, so they can only be told apart by name. D050000L is URW's Dingbats.
+const QRegularExpression symbolFontName(
+    QStringLiteral("symbol|dingbat|emoji|icon|awesome|^D050000L$"),
+    QRegularExpression::CaseInsensitiveOption);
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
@@ -88,6 +110,11 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     m_textZoom = zoomOk && storedZoom > 0 ? qBound(textZoomSteps[0], storedZoom,
                                                    textZoomSteps[textZoomStepCount - 1])
                                           : 1.0;
+
+    const QString savedFont = QSettings().value(editorFontSetting).toString();
+    m_editorFont = !savedFont.isEmpty() && QFontDatabase::hasFamily(savedFont)
+        ? savedFont
+        : defaultEditorFont();
 
     const QString stateDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(stateDirectory);
@@ -443,6 +470,54 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     return ranges;
 }
 
+int Backend::cursorPositionStep(int position, int direction) const
+{
+    if (!m_document || direction == 0)
+        return position;
+
+    const int documentLength = m_document->characterCount() - 1;
+    position = qBound(0, position, documentLength);
+
+    if (direction > 0) {
+        if (position >= documentLength)
+            return documentLength;
+    } else if (position <= 0) {
+        return 0;
+    }
+
+    const QTextBlock block = m_document->findBlock(position);
+    if (!block.isValid())
+        return position;
+
+    const int blockStart = block.position();
+    const int blockTextLength = block.text().size();
+    // A block's text excludes its paragraph separator, so this is the last
+    // cursor position inside the block, just before the separator.
+    const int blockEnd = blockStart + blockTextLength;
+
+    if (direction > 0) {
+        // The separator is the next valid cursor position past a block; the
+        // layout only knows the block's own characters.
+        if (position >= blockEnd)
+            return position + 1;
+    } else if (position <= blockStart) {
+        return position - 1;
+    }
+
+    // A fresh layout over the block's own text is always in sync with the
+    // document, unlike the document's display layout, whose text() cannot be
+    // checked for staleness. Building lines is unnecessary for cursor
+    // stepping and dominates the cost, so the layout is left unformatted.
+    // QTextLayout steps by whole grapheme clusters, so surrogate pairs, skin
+    // tone modifiers and ZWJ sequences are crossed in a single move.
+    QTextLayout layout(block.text());
+    const int local = position - blockStart;
+    const int stepped = direction > 0
+        ? layout.nextCursorPosition(local, QTextLayout::SkipCharacters)
+        : layout.previousCursorPosition(local, QTextLayout::SkipCharacters);
+    return blockStart + qBound(0, stepped, blockTextLength);
+}
+
 void Backend::setSearchHighlight(const QString &query, int currentMatchStart) {
     if (m_highlighter)
         m_highlighter->setSearch(query, currentMatchStart);
@@ -473,6 +548,59 @@ void Backend::saveWindowGeometry(int x, int y, int width, int height, bool maxim
         settings.setValue(QStringLiteral("window/height"), height);
     }
     settings.setValue(QStringLiteral("window/maximized"), maximized);
+}
+
+QString Backend::defaultEditorFont() {
+    return QStringLiteral("IBM Plex Mono");
+}
+
+void Backend::setEditorFont(const QString &family) {
+    if (family.isEmpty() || family == m_editorFont)
+        return;
+
+    m_editorFont = family;
+    QSettings().setValue(editorFontSetting, family);
+    emit editorFontChanged();
+}
+
+QStringList Backend::availableFonts() const {
+    // Leave out icon, emoji, and other symbol fonts, along with anything that
+    // cannot set the Latin text the editor is written in.
+    QStringList families;
+    for (const QString &family : QFontDatabase::families(QFontDatabase::Latin)) {
+        if (QFontDatabase::isPrivateFamily(family)
+                || QFontDatabase::writingSystems(family).contains(QFontDatabase::Symbol))
+            continue;
+        families.append(family);
+    }
+    return selectableFontFamilies(families);
+}
+
+QStringList Backend::selectableFontFamilies(const QStringList &families) {
+    QStringList selectable;
+    static const QRegularExpression foundrySuffix(QStringLiteral("\\s*\\[[^\\]]*\\]$"));
+    for (QString family : families) {
+        // The same family from two foundries is listed as "Name [Foundry]".
+        family.remove(foundrySuffix);
+        if (family.startsWith(QStringLiteral("Noto ")) && !keptNotoFamilies.contains(family))
+            continue;
+        if (genericFontAliases.contains(family, Qt::CaseInsensitive)
+                || family.contains(symbolFontName))
+            continue;
+        if (family == defaultEditorFont() || selectable.contains(family, Qt::CaseInsensitive))
+            continue;
+        selectable.append(family);
+    }
+    std::sort(selectable.begin(), selectable.end(), [](const QString &a, const QString &b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    selectable.prepend(defaultEditorFont());
+    return selectable;
+}
+
+void Backend::documentFontChanged() {
+    if (m_highlighter)
+        m_highlighter->refreshFont();
 }
 
 void Backend::loadDocumentText(const QString &text) {
@@ -635,6 +763,10 @@ void Backend::loadOmarchyTheme() {
     const QString colorsPath = QDir::homePath()
         + QStringLiteral("/.local/state/omarchy/current/theme/colors.toml");
     QString themeMode;
+    QString selection;
+    QString selectionBackground;
+    QString selectionForeground;
+    QString brightForeground;
     QFile file(colorsPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
@@ -663,9 +795,27 @@ void Backend::loadOmarchyTheme() {
             else if (key == QStringLiteral("accent"))
                 m_themeAccent = value;
             else if (key == QStringLiteral("selection"))
-                m_themeSelection = value;
+                selection = value;
+            else if (key == QStringLiteral("selection_background"))
+                selectionBackground = value;
+            else if (key == QStringLiteral("selection_foreground"))
+                selectionForeground = value;
+            else if (key == QStringLiteral("bright_foreground"))
+                brightForeground = value;
         }
     }
+
+    if (!selection.isEmpty())
+        m_themeSelection = selection;
+    else if (!selectionBackground.isEmpty())
+        m_themeSelection = selectionBackground;
+
+    if (!selectionForeground.isEmpty())
+        m_themeSelectionForeground = selectionForeground;
+    else if (!brightForeground.isEmpty())
+        m_themeSelectionForeground = brightForeground;
+    else
+        m_themeSelectionForeground = m_themeForeground;
 
     bool themeModeKnown = false;
     bool themeIsDark = m_darkMode;
@@ -732,10 +882,27 @@ QString Backend::currentDocumentText() const {
 }
 
 int Backend::countWords(const QString &text) {
+    // Only letters and numbers: PCRE2 reads \p{Han} as Script_Extensions, which
+    // puts 。 、 「 and the CJK radicals in Han and would count each as a word.
+    static const QRegularExpression cjkRe(
+        QStringLiteral("(?=[\\p{L}\\p{N}])[\\p{Han}\\p{Hiragana}\\p{Katakana}]"));
     static const QRegularExpression wordRe(
         QStringLiteral("[\\p{L}\\p{N}]+(?:['-][\\p{L}\\p{N}]+)*"));
+
+    // Count unspaced Han and kana characters individually, then replace them
+    // so they remain boundaries between surrounding space-delimited words.
     int count = 0;
-    QRegularExpressionMatchIterator it = wordRe.globalMatch(text);
+
+    QRegularExpressionMatchIterator cjkIt = cjkRe.globalMatch(text);
+    while (cjkIt.hasNext()) {
+        cjkIt.next();
+        ++count;
+    }
+
+    QString nonCjkText = text;
+    nonCjkText.replace(cjkRe, QStringLiteral(" "));
+
+    QRegularExpressionMatchIterator it = wordRe.globalMatch(nonCjkText);
     while (it.hasNext()) {
         it.next();
         ++count;
