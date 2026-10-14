@@ -348,13 +348,6 @@ ApplicationWindow {
             contentWidth: width
             contentHeight: Math.max(height, editor.y + editor.implicitHeight + 220)
             boundsBehavior: Flickable.StopAtBounds
-
-            // Loading a document (recovery, or opening a file) jumps the
-            // cursor to its saved position in the same call that attaches
-            // it, which can scroll the viewport before the user has done
-            // anything; suppress the linger for that one settling jump so
-            // the bar doesn't flash on open.
-            property bool settlingDocument: true
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
                 // Wheel scrolling moves contentY directly rather than
@@ -369,8 +362,12 @@ ApplicationWindow {
                 bottomInset: win.scaledSize(32)
             }
 
+            // Also lingers after paging through the document from the
+            // keyboard, so the bar shows where the jump landed. Writing past
+            // the bottom edge scrolls too, but leaves the bar hidden.
             Timer {
                 id: scrollLinger
+                objectName: "scrollLinger"
                 interval: 600
             }
 
@@ -519,8 +516,6 @@ ApplicationWindow {
             // Jump to a position, abandoning any wheel animation still running.
             function scrollTo(y) {
                 wheelScroll.stop();
-                if (!settlingDocument)
-                    scrollLinger.restart();
                 contentY = snapToPixel(y);
             }
 
@@ -755,6 +750,12 @@ ApplicationWindow {
                         return;
                     }
 
+                    var pageKey = event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp;
+                    var documentEdgeKey = (event.key === Qt.Key_Home || event.key === Qt.Key_End)
+                        && (event.modifiers & Qt.ControlModifier);
+                    if (pageKey || documentEdgeKey)
+                        scrollLinger.restart();
+
                     var returnKey = event.key === Qt.Key_Return || event.key === Qt.Key_Enter;
                     var commandModifier = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier);
                     if (returnKey && !commandModifier) {
@@ -801,7 +802,6 @@ ApplicationWindow {
                 Component.onCompleted: {
                     backend.attachDocument(textDocument);
                     forceActiveFocus();
-                    editorFlick.settlingDocument = false;
                 }
             }
         }
