@@ -42,7 +42,11 @@ void MarkdownHighlighter::refreshFont() {
 }
 
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
-    if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
+    // An edit can carry the painted match away from an offset another match
+    // now holds, so the offset matching is not enough to leave things be.
+    const bool matchStayed = m_currentMatch.isNull() ? currentMatchStart < 0
+                                                     : m_currentMatch.position() == currentMatchStart;
+    if (m_searchQuery == query && m_currentMatchStart == currentMatchStart && matchStayed)
         return;
     const bool sameQuery = m_searchQuery == query;
     const QTextBlock left = m_currentMatch.isNull() ? QTextBlock() : m_currentMatch.block();

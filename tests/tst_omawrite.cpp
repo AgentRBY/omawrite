@@ -306,6 +306,14 @@ private slots:
         QCOMPARE(matchBackground(0), current);
         QCOMPARE(matchBackground(1), other);
 
+        // Nor does it stay behind when another match moves into its offset.
+        editor->setProperty("text", QStringLiteral("foo\nab\nfoo"));
+        QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
+        QCOMPARE(matchBackground(2), current);
+        QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 0), Q_ARG(QString, QStringLiteral("abcdefg")));
+        QCOMPARE(window->property("searchMatches").toList().first().toInt(), 7);
+        QCOMPARE(matchBackground(2), other);
+
         // Matches are found where the highlighter finds them, even past a
         // character whose lowercase is longer.
         editor->setProperty("text", QString::fromUtf8("\xC4\xB0 ab"));
