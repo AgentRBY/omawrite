@@ -450,6 +450,13 @@ private slots:
         QCOMPARE(formatAt(4).fontWeight(), int(QFont::Bold));
         QCOMPARE(formatAt(2).fontPointSize(), formatAt(0).fontPointSize());
         QVERIFY(formatAt(2).fontPointSize() < 2);
+
+        // Code inside a strikethrough keeps its panel and is struck too.
+        document.setPlainText(QStringLiteral("~~`code`~~"));
+        highlighter.setColors("#101010", "#eeeeee", "#5584aa");
+        highlighter.rehighlight();
+        QVERIFY(formatAt(4).fontStrikeOut());
+        QVERIFY(formatAt(4).background().style() != Qt::NoBrush);
     }
 
     void togglesWrappedSelection() {

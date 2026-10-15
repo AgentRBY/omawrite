@@ -207,8 +207,19 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
         }
     }
 
-    // Strikethrough layers over whatever emphasis it encloses rather than
-    // replacing it, and leaves the enclosed markers hidden.
+    // After emphasis, so a code span keeps its own styling where emphasis encloses it.
+    // setFormat replaces rather than merges, so whichever pass runs last wins.
+    if (text.contains(QLatin1Char('`'))) {
+        static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
+        QRegularExpressionMatchIterator codeMatches = codeRe.globalMatch(text);
+        while (codeMatches.hasNext()) {
+            const QRegularExpressionMatch match = codeMatches.next();
+            setFormat(match.capturedStart(0), match.capturedLength(0), m_codeFormat);
+        }
+    }
+
+    // Strikethrough layers over whatever it encloses, emphasis and code alike,
+    // rather than replacing it, and leaves the enclosed markers hidden.
     for (const InlineMarkup &item : markup) {
         if (item.kind != InlineKind::Strikethrough)
             continue;
@@ -223,17 +234,6 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
         }
         for (const Span &marker : item.markers)
             setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
-    }
-
-    // Last, so a code span keeps its own styling where emphasis encloses it.
-    // setFormat replaces rather than merges, so whichever pass runs last wins.
-    if (text.contains(QLatin1Char('`'))) {
-        static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
-        QRegularExpressionMatchIterator codeMatches = codeRe.globalMatch(text);
-        while (codeMatches.hasNext()) {
-            const QRegularExpressionMatch match = codeMatches.next();
-            setFormat(match.capturedStart(0), match.capturedLength(0), m_codeFormat);
-        }
     }
 }
 
