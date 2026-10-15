@@ -55,6 +55,7 @@ public:
     QString themeForeground() const { return m_themeForeground; }
     QString themeAccent() const { return m_themeAccent; }
     QString themeSelection() const { return m_themeSelection; }
+    QString themeCodeBackground() const { return m_themeCodeBackground; }
     QString themeSelectionForeground() const { return m_themeSelectionForeground; }
     QString editorFont() const { return m_editorFont; }
     void setEditorFont(const QString &family);
@@ -175,6 +176,7 @@ private:
     QString m_themeForeground;
     QString m_themeAccent;
     QString m_themeSelection;
+    QString m_themeCodeBackground;
     QString m_themeSelectionForeground;
     QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;

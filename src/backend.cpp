@@ -68,6 +68,17 @@ const QRegularExpression symbolFontName(
     QStringLiteral("symbol|dingbat|emoji|icon|awesome|^D050000L$"),
     QRegularExpression::CaseInsensitiveOption);
 
+namespace {
+
+// A shade of `from` carried part of the way towards `to`.
+QColor blend(const QColor &from, const QColor &to, qreal amount) {
+    return QColor::fromRgbF(from.redF() + (to.redF() - from.redF()) * amount,
+                            from.greenF() + (to.greenF() - from.greenF()) * amount,
+                            from.blueF() + (to.blueF() - from.blueF()) * amount);
+}
+
+}
+
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
     static const QRegularExpression lineBreakRe(QStringLiteral("[\\r\\n]"));
@@ -270,7 +281,8 @@ void Backend::attachDocument(QObject *textDocument) {
     m_lastDocumentText = m_document->toPlainText();
     m_highlighter = new MarkdownHighlighter(m_document);
     m_highlighter->setDarkMode(m_darkMode);
-    m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent);
+    m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
+                             m_themeCodeBackground);
 
     connect(m_document, &QTextDocument::contentsChange, this,
             [this](int position, int, int charsAdded) {
@@ -538,6 +550,12 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     const QTextBlock block =
         m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
     if (!block.isValid())
+        return ranges;
+
+    // The highlighter leaves fenced code alone, so it hides nothing there. A
+    // closing fence is the line whose previous block is still inside.
+    if (block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
         return ranges;
 
     const int lineStart = block.position();
@@ -933,6 +951,7 @@ void Backend::loadOmarchyTheme() {
     QString selectionBackground;
     QString selectionForeground;
     QString brightForeground;
+    QString lighterBackground;
     QFile file(colorsPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
@@ -964,6 +983,8 @@ void Backend::loadOmarchyTheme() {
                 selectionForeground = value;
             else if (key == QStringLiteral("bright_foreground"))
                 brightForeground = value;
+            else if (key == QStringLiteral("lighter_background"))
+                lighterBackground = value;
         }
     }
 
@@ -1005,9 +1026,21 @@ void Backend::loadOmarchyTheme() {
     applyColor(m_themeSelectionForeground, brightForeground);
     applyColor(m_themeSelectionForeground, selectionForeground);
 
+    // Omarchy themes name a lighter background for panels like the one code
+    // sits on, so use the shade the theme chose. Not every theme sets the key,
+    // and a few set it to the page background, which would leave code with no
+    // panel at all: mix a shade of the page towards the text for those. Mixing,
+    // unlike lightening, still moves on a pure black background.
+    const QColor page(m_themeBackground);
+    const QColor lighter(lighterBackground);
+    m_themeCodeBackground = (lighter.isValid() && lighter != page
+                                 ? lighter
+                                 : blend(page, QColor(m_themeForeground), 0.06)).name();
+
     if (m_highlighter) {
         m_highlighter->setDarkMode(m_darkMode);
-        m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent);
+        m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
+                                 m_themeCodeBackground);
     }
 
     if (darkModeFlipped)
