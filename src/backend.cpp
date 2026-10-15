@@ -171,14 +171,18 @@ Backend::Backend(QObject *parent) : QObject(parent) {
 
     loadOmarchyTheme();
     watchOmarchyTheme();
-    connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, [this]() {
+    // Switching themes touches several watched paths in a row, and the theme
+    // folder can be briefly missing, so reload once the burst has settled.
+    m_themeReloadTimer.setSingleShot(true);
+    m_themeReloadTimer.setInterval(100);
+    connect(&m_themeReloadTimer, &QTimer::timeout, this, [this]() {
         loadOmarchyTheme();
         watchOmarchyTheme();
     });
-    connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, [this]() {
-        loadOmarchyTheme();
-        watchOmarchyTheme();
-    });
+    connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, &m_themeReloadTimer,
+            qOverload<>(&QTimer::start));
+    connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, &m_themeReloadTimer,
+            qOverload<>(&QTimer::start));
 }
 
 Backend::~Backend() = default;
@@ -202,12 +206,8 @@ QString Backend::fileName() const {
 }
 
 void Backend::setDarkMode(bool darkMode) {
-    if (m_darkMode == darkMode)
-        return;
-
-    m_darkMode = darkMode;
+    m_systemDarkMode = darkMode;
     loadOmarchyTheme();
-    emit darkModeChanged();
 }
 
 void Backend::setDesktopTextScale(qreal textScale) {
@@ -267,9 +267,8 @@ void Backend::attachDocument(QObject *textDocument) {
     m_document = quickDocument->textDocument();
     m_lastDocumentText = m_document->toPlainText();
     m_highlighter = new MarkdownHighlighter(m_document);
-    m_highlighter->setDarkMode(m_darkMode);
-    m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
-                             m_themeCodeBackground);
+    m_highlighter->setTheme(m_darkMode, m_themeBackground, m_themeForeground, m_themeAccent,
+                            m_themeCodeBackground);
 
     connect(m_document, &QTextDocument::contentsChange, this,
             [this](int position, int, int charsAdded) {
@@ -1015,7 +1014,12 @@ void Backend::loadOmarchyTheme() {
         }
     }
 
-    bool themeIsDark = m_darkMode;
+    const bool wasDark = m_darkMode;
+    const QStringList previousColors{m_themeBackground, m_themeForeground, m_themeAccent,
+                                     m_themeSelection, m_themeSelectionForeground,
+                                     m_themeCodeBackground};
+
+    bool themeIsDark = m_systemDarkMode;
     if (themeMode == QStringLiteral("dark")) {
         themeIsDark = true;
     } else if (themeMode == QStringLiteral("light")) {
@@ -1028,7 +1032,6 @@ void Backend::loadOmarchyTheme() {
             themeIsDark = luminance < 0.5;
         }
     }
-    const bool darkModeFlipped = themeIsDark != m_darkMode;
     m_darkMode = themeIsDark;
 
     // The defaults follow the mode the theme resolved to, so a colour we cannot
@@ -1065,14 +1068,17 @@ void Backend::loadOmarchyTheme() {
                                  : blend(page, QColor(m_themeForeground), 0.06)).name();
 
     if (m_highlighter) {
-        m_highlighter->setDarkMode(m_darkMode);
-        m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
-                                 m_themeCodeBackground);
+        m_highlighter->setTheme(m_darkMode, m_themeBackground, m_themeForeground,
+                                m_themeAccent, m_themeCodeBackground);
     }
 
-    if (darkModeFlipped)
+    if (m_darkMode != wasDark)
         emit darkModeChanged();
-    emit themeColorsChanged();
+    const QStringList colors{m_themeBackground, m_themeForeground, m_themeAccent,
+                             m_themeSelection, m_themeSelectionForeground,
+                             m_themeCodeBackground};
+    if (colors != previousColors)
+        emit themeColorsChanged();
 }
 
 void Backend::watchOmarchyTheme() {

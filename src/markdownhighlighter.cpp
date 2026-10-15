@@ -5,26 +5,23 @@
 #include <QFontMetricsF>
 #include <QTextDocument>
 
+#include <algorithm>
+
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document)
     : QSyntaxHighlighter(document) {
     rebuildFormats();
 }
 
-void MarkdownHighlighter::setDarkMode(bool darkMode) {
-    if (m_darkMode == darkMode)
+// One setter for the whole theme, so a theme change rehighlights once.
+void MarkdownHighlighter::setTheme(bool darkMode, const QString &background,
+                                   const QString &foreground, const QString &accent,
+                                   const QString &codeBackground) {
+    if (m_darkMode == darkMode && m_customBackground == background
+            && m_customForeground == foreground && m_customAccent == accent
+            && m_customCodeBackground == codeBackground)
         return;
 
     m_darkMode = darkMode;
-    rebuildFormats();
-    rehighlight();
-}
-
-void MarkdownHighlighter::setColors(const QString &background, const QString &foreground,
-                                    const QString &accent, const QString &codeBackground) {
-    if (m_customBackground == background && m_customForeground == foreground
-            && m_customAccent == accent && m_customCodeBackground == codeBackground)
-        return;
-
     m_customBackground = background;
     m_customForeground = foreground;
     m_customAccent = accent;
@@ -83,11 +80,9 @@ void MarkdownHighlighter::rebuildFormats() {
 
     m_boldFormat = QTextCharFormat();
     m_boldFormat.setFontWeight(QFont::Bold);
-    m_boldFormat.setForeground(text);
 
     m_italicFormat = QTextCharFormat();
     m_italicFormat.setFontItalic(true);
-    m_italicFormat.setForeground(text);
 
     m_codeFormat = QTextCharFormat();
     m_codeFormat.setForeground(text);
@@ -120,7 +115,9 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
     // block, and Qt rehighlights the rest of the document when it changes.
     const int previous = previousBlockState();
     if (previous >= InsideFence) {
-        const bool closing = closesFence(text, previous - InsideFence + 3);
+        const int fence = previous - InsideFence;
+        const bool closing = closesFence(text, fence / 2 + 3,
+                                         fence % 2 ? QLatin1Char('~') : QLatin1Char('`'));
         setCurrentBlockState(closing ? Prose : previous);
         setFormat(0, text.length(), closing ? m_fenceFormat : m_codeFormat);
         highlightSearch(text);
@@ -129,7 +126,8 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
 
     const int opening = openingFenceLength(text);
     if (opening > 0) {
-        setCurrentBlockState(InsideFence + opening - 3);
+        const bool tildes = text.trimmed().startsWith(QLatin1Char('~'));
+        setCurrentBlockState(InsideFence + (opening - 3) * 2 + (tildes ? 1 : 0));
         setFormat(0, text.length(), m_fenceFormat);
         highlightSearch(text);
         return;
@@ -147,19 +145,22 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
     highlightSearch(text);
 }
 
-// Three or more backticks, indented at most three spaces. An info string may
-// follow, but not one with a backtick in it: "```code```" is inline code.
+// Three or more backticks or tildes, indented at most three spaces. An info
+// string may follow, but a backtick fence's may not hold a backtick:
+// "```code```" is inline code.
 int MarkdownHighlighter::openingFenceLength(const QString &text) {
-    static const QRegularExpression openingRe(QStringLiteral("^ {0,3}(`{3,})[^`]*$"));
+    static const QRegularExpression openingRe(
+        QStringLiteral("^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$"));
     const QRegularExpressionMatch match = openingRe.match(text);
-    return match.hasMatch() ? int(match.capturedLength(1)) : 0;
+    return match.hasMatch() ? int(qMax(match.capturedLength(1), match.capturedLength(2))) : 0;
 }
 
-// At least as many backticks as opened the fence, and nothing after them.
-bool MarkdownHighlighter::closesFence(const QString &text, int openingLength) {
-    static const QRegularExpression closingRe(QStringLiteral("^ {0,3}(`{3,})\\s*$"));
+// At least as many of the same fence character as opened it, and nothing after.
+bool MarkdownHighlighter::closesFence(const QString &text, int openingLength, QChar marker) {
+    static const QRegularExpression closingRe(QStringLiteral("^ {0,3}(`{3,}|~{3,})\\s*$"));
     const QRegularExpressionMatch match = closingRe.match(text);
-    return match.hasMatch() && match.capturedLength(1) >= openingLength;
+    return match.hasMatch() && match.capturedLength(1) >= openingLength
+        && match.captured(1).at(0) == marker;
 }
 
 void MarkdownHighlighter::highlightSearch(const QString &text) {
@@ -216,43 +217,62 @@ void MarkdownHighlighter::highlightMarkers(const QString &text) {
             setFormat(0, list.capturedLength(1), m_markerFormat);
     }
 
-    if (firstChar == QLatin1Char('-') || firstChar == QLatin1Char('*')
-            || firstChar == QLatin1Char('_')) {
-        static const QRegularExpression ruleRe(QStringLiteral("^\\s{0,3}([-*_])(?:\\s*\\1){2,}\\s*$"));
-        const QRegularExpressionMatch rule = ruleRe.match(text);
-        if (rule.hasMatch())
-            setFormat(0, text.length(), m_markerFormat);
-    }
+    if (isThematicBreak(text))
+        setFormat(0, text.length(), m_markerFormat);
+}
+
+// A line of three or more -, * or _ (spaces allowed between) is a rule, not
+// emphasis: "***" and "___" draw a line.
+bool MarkdownHighlighter::isThematicBreak(const QString &text) {
+    static const QRegularExpression ruleRe(QStringLiteral("^\\s{0,3}([-*_])(?:\\s*\\1){2,}\\s*$"));
+    return ruleRe.match(text).hasMatch();
 }
 
 void MarkdownHighlighter::highlightInline(const QString &text) {
-    const QList<InlineMarkup> markup = inlineMarkup(text);
+    // Inline styles merge onto what the block already set, so a heading stays
+    // bold and a quote keeps its colour under emphasis. setFormat replaces, so
+    // merge one character at a time.
+    const auto mergeFormat = [this](int position, const QTextCharFormat &extra) {
+        QTextCharFormat merged = format(position);
+        merged.merge(extra);
+        setFormat(position, 1, merged);
+    };
+
+    // Code keeps its own styling even when emphasis or a link encloses it.
+    QList<bool> inCode(text.length(), false);
+    for (const Span &code : codeSpans(text)) {
+        for (int i = code.start; i < code.start + code.length; ++i) {
+            mergeFormat(i, m_codeFormat);
+            inCode[i] = true;
+        }
+    }
+
+    // Outer markup first, so what it encloses has the last word: a link inside
+    // bold keeps its colour. Strikethrough draws over code too.
+    static const QTextCharFormat struck = [] {
+        QTextCharFormat format;
+        format.setFontStrikeOut(true);
+        return format;
+    }();
+    QList<InlineMarkup> markup = inlineMarkup(text);
+    std::stable_sort(markup.begin(), markup.end(),
+                     [](const InlineMarkup &a, const InlineMarkup &b) {
+                         return a.content.length > b.content.length;
+                     });
     for (const InlineMarkup &item : markup) {
-        if (item.kind == InlineKind::Strikethrough)
-            continue;
         const QTextCharFormat &contentFormat =
             item.kind == InlineKind::Bold ? m_boldFormat
             : item.kind == InlineKind::Italic ? m_italicFormat
-                                              : m_linkFormat;
-        setFormat(item.content.start, item.content.length, contentFormat);
-        for (const Span &marker : item.markers)
-            setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
+            : item.kind == InlineKind::Strikethrough ? struck
+                                                     : m_linkFormat;
+        for (int i = item.content.start; i < item.content.start + item.content.length; ++i) {
+            if (!inCode[i] || item.kind == InlineKind::Strikethrough)
+                mergeFormat(i, contentFormat);
+        }
     }
 
-    // setFormat replaces rather than merges. Code keeps its own styling even
-    // when emphasis or a link surrounds it.
-    for (const Span &code : codeSpans(text))
-        setFormat(code.start, code.length, m_codeFormat);
-
-    // Strikethrough draws over whatever it encloses instead of replacing it.
+    // Last, so no enclosing style shows a marker that the caret skips over.
     for (const InlineMarkup &item : markup) {
-        if (item.kind != InlineKind::Strikethrough)
-            continue;
-        for (int i = item.content.start; i < item.content.start + item.content.length; ++i) {
-            QTextCharFormat struck = format(i);
-            struck.setFontStrikeOut(true);
-            setFormat(i, 1, struck);
-        }
         for (const Span &marker : item.markers)
             setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
     }
@@ -294,6 +314,8 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
             && !text.contains(QLatin1Char('[')) && !text.contains(QLatin1Char('~'))) {
         return markup;
     }
+    if (isThematicBreak(text))
+        return markup;
 
     const auto span = [](const QRegularExpressionMatch &match, int group) {
         return Span{int(match.capturedStart(group)), int(match.capturedLength(group))};
@@ -303,24 +325,54 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     // marker: `default_line_height` keeps its underscores. Markup whose
     // markers land in a code span is dropped; markup that merely wraps one
     // (**bold with `code` inside**) still applies.
+    // A backslash escapes a marker, as it does a backtick: \\*literal\\*.
     const QList<Span> code = codeSpans(text);
+    const auto escaped = [&text](int position) {
+        int backslashes = 0;
+        for (int i = position - 1; i >= 0 && text.at(i) == QLatin1Char('\\'); --i)
+            ++backslashes;
+        return backslashes % 2 != 0;
+    };
     const auto append = [&](const InlineMarkup &item) {
-        for (const Span &span : code) {
-            for (const Span &marker : item.markers) {
+        for (const Span &marker : item.markers) {
+            if (escaped(marker.start))
+                return false;
+            for (const Span &span : code) {
                 if (marker.start < span.start + span.length
                         && span.start < marker.start + marker.length)
-                    return;
+                    return false;
             }
         }
         markup.append(item);
+        return true;
     };
+
+    // "***word***" is bold and italic at once, as Ctrl+B then Ctrl+I writes it:
+    // the outer two asterisks of each run are bold, the inner one italic. Its
+    // runs are then masked so the patterns below do not split them again.
+    QString unclaimed = text;
+    static const QRegularExpression boldItalicRe(
+        QStringLiteral("(?<!\\*)\\*\\*\\*(?![\\s*])(.*?[^\\s*])\\*\\*\\*(?!\\*)"));
+    QRegularExpressionMatchIterator boldItalicMatches = boldItalicRe.globalMatch(text);
+    while (boldItalicMatches.hasNext()) {
+        const QRegularExpressionMatch match = boldItalicMatches.next();
+        const Span whole = span(match, 0);
+        const int end = whole.start + whole.length;
+        if (!append({InlineKind::Bold, {whole.start + 2, whole.length - 4},
+                     {{whole.start, 2}, {end - 2, 2}}}))
+            continue;
+        markup.append({InlineKind::Italic, span(match, 1),
+                       {{whole.start + 2, 1}, {end - 3, 1}}});
+        for (int i : {whole.start, whole.start + 1, whole.start + 2, end - 3, end - 2, end - 1})
+            unclaimed[i] = QChar::ObjectReplacementCharacter;
+    }
 
     // Underscores only delimit emphasis at a word boundary, so identifiers such
     // as snake_case_name read as themselves. Asterisks delimit anywhere.
     static const QRegularExpression boldRe(
         QStringLiteral("\\*\\*(.+?)\\*\\*|(?<!\\w)__(.+?)__(?!\\w)"),
         QRegularExpression::UseUnicodePropertiesOption);
-    QRegularExpressionMatchIterator boldMatches = boldRe.globalMatch(text);
+    QRegularExpressionMatchIterator boldMatches = boldRe.globalMatch(unclaimed);
     while (boldMatches.hasNext()) {
         const QRegularExpressionMatch match = boldMatches.next();
         const Span whole = span(match, 0);
@@ -335,7 +387,7 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     static const QRegularExpression italicRe(
         QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
         QRegularExpression::UseUnicodePropertiesOption);
-    QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(text);
+    QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(unclaimed);
     while (italicMatches.hasNext()) {
         const QRegularExpressionMatch match = italicMatches.next();
         const Span whole = span(match, 0);
@@ -347,7 +399,7 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     // Exactly two tildes, opening before text and closing after it.
     static const QRegularExpression strikeRe(
         QStringLiteral("(?<!~)~~(?![\\s~])(.*?[^\\s~])~~(?!~)"));
-    QRegularExpressionMatchIterator strikeMatches = strikeRe.globalMatch(text);
+    QRegularExpressionMatchIterator strikeMatches = strikeRe.globalMatch(unclaimed);
     while (strikeMatches.hasNext()) {
         const QRegularExpressionMatch match = strikeMatches.next();
         const Span whole = span(match, 0);
@@ -356,8 +408,8 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     }
 
     static const QRegularExpression linkRe(
-        QStringLiteral("\\[([^\\]]+)\\]\\(((?:\\\\.|[^)])+)\\)"));
-    QRegularExpressionMatchIterator linkMatches = linkRe.globalMatch(text);
+        QStringLiteral("\\[([^\\]]+)\\]\\(((?:\\\\.|\\([^()]*\\)|[^()])+)\\)"));
+    QRegularExpressionMatchIterator linkMatches = linkRe.globalMatch(unclaimed);
     while (linkMatches.hasNext()) {
         const QRegularExpressionMatch match = linkMatches.next();
         const Span whole = span(match, 0);

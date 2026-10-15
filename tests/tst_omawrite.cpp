@@ -443,7 +443,7 @@ private slots:
         QTextDocument document;
         document.setPlainText(text);
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto formatAt = [&document](int position) {
@@ -483,7 +483,7 @@ private slots:
                                             "```\n"
                                             "after _italic_\n"));
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto stateOf = [&document](int blockNumber) {
@@ -524,7 +524,7 @@ private slots:
                                             "````\n"
                                             "after _italic_\n"));
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto stateOf = [&document](int blockNumber) {
@@ -644,6 +644,114 @@ private slots:
                 != QColor(QStringLiteral("#0c0b0c")));
     }
 
+    void rendersBoldItalicRuns() {
+        const QString text = QStringLiteral("a ***word*** b");
+        const auto markup = MarkdownHighlighter::inlineMarkup(text);
+        QCOMPARE(markup.size(), 2);
+        QCOMPARE(markup.at(0).kind, MarkdownHighlighter::InlineKind::Bold);
+        QCOMPARE(markup.at(1).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(markup.at(1).content.start, 5);
+        QCOMPARE(markup.at(1).content.length, 4);
+
+        const auto formats = highlightedFormats(text);
+        QVERIFY(formats.at(5).fontItalic());
+        QCOMPARE(formats.at(5).fontWeight(), int(QFont::Bold));
+        for (int i : {2, 3, 4, 9, 10, 11})
+            QCOMPARE(formats.at(i).fontPointSize(), 1.0);
+    }
+
+    // Markers nested inside other markup stay hidden, as the caret skips them.
+    void hidesMarkersInsideNestedMarkup() {
+        const QString linked = QStringLiteral("[**a**](u)");
+        const auto linkFormats = highlightedFormats(linked);
+        for (int i : {0, 1, 2, 4, 5, 6})
+            QCOMPARE(linkFormats.at(i).fontPointSize(), 1.0);
+        QCOMPARE(linkFormats.at(3).fontWeight(), int(QFont::Bold));
+        QVERIFY(linkFormats.at(3).fontUnderline());
+
+        const QString nested = QStringLiteral("*a __b__ c*");
+        const auto nestedFormats = highlightedFormats(nested);
+        for (int i : {0, 3, 4, 6, 7, 10})
+            QCOMPARE(nestedFormats.at(i).fontPointSize(), 1.0);
+        QVERIFY(nestedFormats.at(5).fontItalic());
+        QCOMPARE(nestedFormats.at(5).fontWeight(), int(QFont::Bold));
+    }
+
+    void honoursBackslashEscapes() {
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\*not\\* here")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\[x](y)")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\~~not~~")).isEmpty());
+        // An escaped backslash leaves the marker alone.
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\\\*yes*")).size(), 1);
+    }
+
+    void leavesThematicBreaksAlone() {
+        for (const QString &rule : {QStringLiteral("*****"), QStringLiteral("___"),
+                                    QStringLiteral("* * *")}) {
+            QVERIFY2(MarkdownHighlighter::inlineMarkup(rule).isEmpty(), qPrintable(rule));
+            const auto formats = highlightedFormats(rule);
+            for (const QTextCharFormat &format : formats) {
+                QVERIFY(format.fontWeight() != QFont::Bold);
+                QVERIFY(format.fontPointSize() != 1.0);
+            }
+        }
+    }
+
+    void mergesInlineStylesWithTheBlock() {
+        // A heading stays bold under italic, a link, or code.
+        const auto heading = highlightedFormats(QStringLiteral("# head *it* [l](u) `c`"));
+        QVERIFY(heading.at(8).fontItalic());
+        QCOMPARE(heading.at(8).fontWeight(), int(QFont::Bold));
+        QCOMPARE(heading.at(13).fontWeight(), int(QFont::Bold));
+        QCOMPARE(heading.at(20).fontWeight(), int(QFont::Bold));
+
+        // A quote keeps its colour under bold.
+        const auto quote = highlightedFormats(QStringLiteral("> quote **b**"));
+        QCOMPARE(quote.at(10).fontWeight(), int(QFont::Bold));
+        QCOMPARE(quote.at(10).foreground().color(), quote.at(3).foreground().color());
+    }
+
+    void recognisesTildeFences() {
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("~~~js\n"
+                                            "*code*\n"
+                                            "```\n"
+                                            "~~~\n"
+                                            "after *it*\n"));
+        MarkdownHighlighter highlighter(&document);
+        highlighter.rehighlight();
+        const auto stateOf = [&document](int blockNumber) {
+            return document.findBlockByNumber(blockNumber).userState();
+        };
+        QVERIFY(stateOf(0) >= int(MarkdownHighlighter::InsideFence));
+        QVERIFY(stateOf(1) >= int(MarkdownHighlighter::InsideFence));
+        // Backticks do not close a tilde fence.
+        QVERIFY(stateOf(2) >= int(MarkdownHighlighter::InsideFence));
+        QCOMPARE(stateOf(3), int(MarkdownHighlighter::Prose));
+        QCOMPARE(stateOf(4), int(MarkdownHighlighter::Prose));
+    }
+
+    void readsLinkDestinationsWithParentheses() {
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(QStringLiteral("[a](b(c))"), 1),
+                 QStringLiteral("b(c)"));
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(QStringLiteral("[a](b) and (c)"), 1),
+                 QStringLiteral("b"));
+    }
+
+    void reportsThemeChangesOnlyWhenTheyHappen() {
+        ScopedTheme theme("mode = \"dark\"\nbackground = \"#111111\"\n");
+        QVERIFY(theme.ok);
+        Backend backend;
+        QSignalSpy colorsSpy(&backend, &Backend::themeColorsChanged);
+        QSignalSpy modeSpy(&backend, &Backend::darkModeChanged);
+
+        // The theme names its mode, so the desktop's setting changes nothing.
+        backend.setDarkMode(false);
+        QVERIFY(backend.darkMode());
+        QCOMPARE(colorsSpy.count(), 0);
+        QCOMPARE(modeSpy.count(), 0);
+    }
+
     void ignoresInlineMarkdownInsideCodeSpans() {
         QCOMPARE(MarkdownHighlighter::inlineMarkup(
                      QStringLiteral("`The_brown_fox` jumps")).size(), 0);
@@ -698,7 +806,7 @@ private slots:
         MarkdownHighlighter highlighter(&document);
         document.setPlainText(QStringLiteral("_a `b` c_"));
         // The code panel comes from the theme, as Backend passes it in.
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         // The constructor's own rehighlight is queued, so ask for one directly.
         highlighter.rehighlight();
 
@@ -2260,6 +2368,21 @@ private slots:
     }
 
 private:
+    // The character formats the highlighter gives a single line of text.
+    static QList<QTextCharFormat> highlightedFormats(const QString &text) {
+        QTextDocument document;
+        document.setPlainText(text);
+        MarkdownHighlighter highlighter(&document);
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.rehighlight();
+        QList<QTextCharFormat> formats(text.length());
+        for (const auto &range : document.firstBlock().layout()->formats()) {
+            for (int i = range.start; i < range.start + range.length; ++i)
+                formats[i] = range.format;
+        }
+        return formats;
+    }
+
     // Points HOME at a scratch tree holding one colors.toml, and puts it back on the way out.
     struct ScopedTheme {
         explicit ScopedTheme(const QByteArray &palette) {
