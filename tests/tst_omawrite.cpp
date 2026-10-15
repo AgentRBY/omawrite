@@ -279,6 +279,33 @@ private slots:
         QCOMPARE(editor->property("text").toString(), QStringLiteral("foo barxy foo"));
         QCOMPARE(window->property("searchMatches").toList().size(), 2);
 
+        // The current match's highlight leaves its old block even when text
+        // above it is deleted.
+        auto *quickDocument = qobject_cast<QQuickTextDocument *>(
+            editor->property("textDocument").value<QObject *>());
+        QVERIFY(quickDocument);
+        QTextDocument *document = quickDocument->textDocument();
+        const auto matchBackground = [document](int blockNumber) {
+            const QTextBlock block = document->findBlockByNumber(blockNumber);
+            for (const QTextLayout::FormatRange &range : block.layout()->formats()) {
+                if (range.start == 0 && range.format.hasProperty(QTextFormat::BackgroundBrush))
+                    return range.format.background().color();
+            }
+            return QColor();
+        };
+        editor->setProperty("text", QStringLiteral("long text\nfoo\nfoo"));
+        searchField->setProperty("text", QStringLiteral("x"));
+        searchField->setProperty("text", QStringLiteral("foo"));
+        QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
+        const QColor current = matchBackground(2);
+        const QColor other = matchBackground(1);
+        QVERIFY(current.isValid() && other.isValid() && current != other);
+        QMetaObject::invokeMethod(editor, "remove", Q_ARG(int, 0), Q_ARG(int, 10));
+        QCOMPARE(window->property("searchMatches").toList().size(), 2);
+        QCOMPARE(window->property("searchMatchIndex").toInt(), 0);
+        QCOMPARE(matchBackground(0), current);
+        QCOMPARE(matchBackground(1), other);
+
         // Matches are found where the highlighter finds them, even past a
         // character whose lowercase is longer.
         editor->setProperty("text", QString::fromUtf8("\xC4\xB0 ab"));

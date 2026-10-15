@@ -45,9 +45,14 @@ void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart)
     if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
         return;
     const bool sameQuery = m_searchQuery == query;
-    const int previousMatchStart = m_currentMatchStart;
+    const QTextBlock left = m_currentMatch.isNull() ? QTextBlock() : m_currentMatch.block();
     m_searchQuery = query;
     m_currentMatchStart = currentMatchStart;
+    m_currentMatch = QTextCursor();
+    if (currentMatchStart >= 0) {
+        m_currentMatch = QTextCursor(document());
+        m_currentMatch.setPosition(qBound(0, currentMatchStart, document()->characterCount() - 1));
+    }
     if (!sameQuery) {
         rehighlight();
         return;
@@ -55,8 +60,7 @@ void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart)
 
     // Only the current match moved, so restyle just the blocks it left and
     // entered rather than the whole document.
-    const QTextBlock left = document()->findBlock(previousMatchStart);
-    const QTextBlock entered = document()->findBlock(currentMatchStart);
+    const QTextBlock entered = m_currentMatch.isNull() ? QTextBlock() : m_currentMatch.block();
     if (left.isValid())
         rehighlightBlock(left);
     if (entered.isValid() && entered != left)
