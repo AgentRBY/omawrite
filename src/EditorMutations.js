@@ -30,11 +30,13 @@ function toggleWrap(editor, before, after) {
             ++i;
         return i - position;
     };
-    // Markers of this emphasis inside the text mean the selection spans
-    // several runs, as in "**a** and **b**". Stripping the outer pair would
-    // leave the inner ones unmatched, so wrap the whole selection instead.
-    // Other emphasis nested inside, like the bold in "*a **b** c*", is fine.
+    // Markers of this emphasis inside the text are fine when they pair up
+    // among themselves, as in "**a **b** c**", but one that closes before it
+    // opens means the selection spans separate runs, as in "**a** and **b**".
+    // Stripping the outer pair there would leave the inner ones unmatched.
+    // A run reads as closing when text sits before it and space after it.
     var spansRuns = function(inner) {
+        var depth = 0;
         var i = 0;
         while (i < inner.length) {
             if (inner.charAt(i) !== mark) {
@@ -44,10 +46,19 @@ function toggleWrap(editor, before, after) {
             var runStart = i;
             while (i < inner.length && inner.charAt(i) === mark)
                 ++i;
-            if (holds(i - runStart))
+            if (!holds(i - runStart))
+                continue;
+            var spaceBefore = runStart === 0 || /\s/.test(inner.charAt(runStart - 1));
+            var spaceAfter = i === inner.length || /\s/.test(inner.charAt(i));
+            var closing = !spaceBefore && (spaceAfter || depth > 0);
+            if (!closing)
+                ++depth;
+            else if (depth === 0)
                 return true;
+            else
+                --depth;
         }
-        return false;
+        return depth !== 0;
     };
 
     // The run on each side counts the markers inside the selection and those
@@ -65,7 +76,13 @@ function toggleWrap(editor, before, after) {
     var left = outsideBefore + leading;
     var right = outsideAfter + trailing;
     var content = selected.slice(leading, selected.length - trailing);
-    if (left === right && holds(left) && !spansRuns(content)) {
+    // With nothing between them, the two sides may just be halves of one
+    // longer delimiter, like the caret inside the "**" of "**word**". Only an
+    // empty pair standing on its own is ours to remove.
+    var standsAlone = content.length > 0
+        || (!/\w/.test(text.charAt(start - outsideBefore - 1))
+            && !/\w/.test(text.charAt(end + outsideAfter)));
+    if (left === right && holds(left) && standsAlone && !spansRuns(content)) {
         var keep = Array(left - size + 1).join(mark);
         var rangeStart = start - outsideBefore;
         replaceRange(editor, rangeStart, end + outsideAfter, keep + content + keep,

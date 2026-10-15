@@ -495,6 +495,8 @@ private slots:
                 property string boldOffInsideItalic
                 property string italicAroundNestedBold
                 property string boldAroundItalic
+                property string boldAroundBold
+                property string caretInsideBoldDelimiter
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -556,6 +558,18 @@ private slots:
                     EditorMutations.toggleWrap(this, "**", "**");
                     EditorMutations.toggleWrap(this, "**", "**");
                     boldAroundItalic = text;
+
+                    text = "a **b** c";
+                    selectAll();
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    selectAll();
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    boldAroundBold = text;
+
+                    text = "**word**";
+                    cursorPosition = 1;
+                    EditorMutations.toggleWrap(this, "*", "*");
+                    caretInsideBoldDelimiter = text;
                 }
             }
         )QML";
@@ -589,6 +603,12 @@ private slots:
         QCOMPARE(editor->property("italicAroundNestedBold").toString(),
                  QStringLiteral("a **b** c"));
         QCOMPARE(editor->property("boldAroundItalic").toString(), QStringLiteral("*word*"));
+        QCOMPARE(editor->property("boldAroundBold").toString(), QStringLiteral("a **b** c"));
+        // Half of a bold delimiter is not an empty italic pair to remove.
+        QVERIFY(editor->property("caretInsideBoldDelimiter").toString()
+                    .endsWith(QStringLiteral("word**")));
+        QVERIFY(editor->property("caretInsideBoldDelimiter").toString()
+                    != QStringLiteral("word**"));
     }
 
     void keepsCursorAndSelectionStableAcrossInsertions() {
