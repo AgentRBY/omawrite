@@ -630,9 +630,6 @@ private slots:
     }
 
     void flashesScrollBarOnlyWhenPaging() {
-    }
-
-    void breaksLinesOnReturn() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
 
@@ -643,7 +640,6 @@ private slots:
         QVERIFY2(component.isReady(), qPrintable(component.errorString()));
         QScopedPointer<QObject> object(component.create());
         QVERIFY2(object, qPrintable(component.errorString()));
-
         auto *window = qobject_cast<QQuickWindow *>(object.data());
         QVERIFY(window);
         window->show();
@@ -672,7 +668,26 @@ private slots:
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QVERIFY(linger->property("running").toBool());
         QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+    }
 
+    void breaksLinesOnReturn() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
         QVERIFY(editor);
         QMetaObject::invokeMethod(editor, "forceActiveFocus");
         QVERIFY(editor->property("activeFocus").toBool());
