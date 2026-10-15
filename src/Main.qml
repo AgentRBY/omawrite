@@ -885,7 +885,28 @@ ApplicationWindow {
                     linkHoverRootY = rootPoint.y;
                     linkHoverX = x;
                     linkHoverY = y;
-                    hoveredLinkUrl = backend.linkUrlAt(positionAt(x, y));
+                    hoveredLinkUrl = linkUrlUnder(x, y);
+                }
+
+                // positionAt() snaps to the nearest caret position, so past the
+                // end of a line it still lands on the last character. Only count
+                // a character the pointer is actually over.
+                function characterUnder(x, y) {
+                    var position = positionAt(x, y);
+                    var box = positionToRectangle(position);
+                    if (position > 0 && box.x > x)
+                        box = positionToRectangle(--position);
+                    if (y < box.y || y >= box.y + box.height || x < box.x)
+                        return -1;
+                    var next = positionToRectangle(position + 1);
+                    var right = next.y === box.y && next.x > box.x
+                        ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
+                    return x < right && position < length ? position : -1;
+                }
+
+                function linkUrlUnder(x, y) {
+                    var position = characterUnder(x, y);
+                    return position < 0 ? "" : backend.linkUrlAt(position);
                 }
 
                 function refreshLinkHover() {
@@ -897,7 +918,7 @@ ApplicationWindow {
                                                    linkHoverRootX, linkHoverRootY);
                     linkHoverX = point.x;
                     linkHoverY = point.y;
-                    hoveredLinkUrl = backend.linkUrlAt(positionAt(point.x, point.y));
+                    hoveredLinkUrl = linkUrlUnder(point.x, point.y);
                 }
 
                 function clearLinkHover() {
@@ -951,7 +972,7 @@ ApplicationWindow {
                 textFormat: Text.PlainText
                 text: editor.hoveredLinkUrl
                 color: backend.themeForeground
-                font.family: "iA Writer Mono S"
+                font.family: backend.editorFont
                 font.pixelSize: win.scaledSize(12)
                 elide: Text.ElideMiddle
                 verticalAlignment: Text.AlignVCenter

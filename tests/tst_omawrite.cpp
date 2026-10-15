@@ -160,6 +160,61 @@ private slots:
         QVERIFY(MarkdownHighlighter::linkUrlAt(text, text.indexOf(QStringLiteral("https"))).isEmpty());
     }
 
+    void showsLinkUrlOnlyOverTheLinkText() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("see [label](https://example.com)\nplain"));
+
+        const auto urlUnder = [editor](qreal x, qreal y) {
+            QVariant url;
+            QMetaObject::invokeMethod(editor, "linkUrlUnder", Q_RETURN_ARG(QVariant, url),
+                                      Q_ARG(QVariant, x), Q_ARG(QVariant, y));
+            return url.toString();
+        };
+        const auto boxAt = [editor](int position) {
+            QRectF box;
+            QMetaObject::invokeMethod(editor, "positionToRectangle", Q_RETURN_ARG(QRectF, box),
+                                      Q_ARG(int, position));
+            return box;
+        };
+
+        // Over the label (the hidden "[" is index 4), in the right half of a
+        // character too.
+        const QRectF first = boxAt(5);
+        const QRectF second = boxAt(6);
+        const qreal middleY = first.y() + first.height() / 2;
+        QCOMPARE(urlUnder(first.x() + 1, middleY), QStringLiteral("https://example.com"));
+        QCOMPARE(urlUnder(second.x() - 1, middleY), QStringLiteral("https://example.com"));
+        // Over the plain word before it.
+        QCOMPARE(urlUnder(boxAt(0).x() + 1, middleY), QString());
+        // Past the end of the line the link ends.
+        QCOMPARE(urlUnder(editor->property("width").toReal() - 2, middleY), QString());
+        // The right half of the label's last character still counts, though
+        // the nearest caret position is past the label.
+        QCOMPARE(urlUnder(boxAt(10).x() - 1, middleY), QStringLiteral("https://example.com"));
+
+        // Below a last line that is a link, positionAt() snaps up onto it.
+        editor->setProperty("text", QStringLiteral("[label](https://example.com)"));
+        const QRectF only = boxAt(1);
+        QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() / 2),
+                 QStringLiteral("https://example.com"));
+        QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() * 3), QString());
+    }
+
     void showsLinkTooltipUrlAsPlainText() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
