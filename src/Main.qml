@@ -718,42 +718,65 @@ ApplicationWindow {
                     replaceSelectionWith("\n\n");
                 }
 
-                // Tab nests the list items the caret or selection touches by
-                // the width of their own marker, which is where Markdown looks
-                // for a child item, and Shift+Tab takes that width back off.
-                // Anywhere else, code fences included, Tab is left alone.
-                function indentListItems(direction) {
+                // Tab nests the list items the caret or selection touches under
+                // the item above them, in line with its text, and Shift+Tab
+                // lifts them back beside their parent. Anywhere else, code
+                // fences included, Tab is left alone.
+                function indentListItems(outdent) {
+                    // An item is its indent plus the marker and spaces that
+                    // reach its text. "* * *" and "- - -" are rules, not items.
+                    var listItem = function(line) {
+                        if (/^ {0,3}([-*])([ \t]*\1){2,}[ \t]*$/.test(line))
+                            return null;
+                        return line.match(/^([ \t]*)((?:[-+*]|\d+[.)])[ \t]+)/);
+                    };
+                    var columns = function(indent) {
+                        return indent.replace(/\t/g, "    ").length;
+                    };
+
+                    // A selection that ends at the start of a line leaves it be.
                     var start = text.lastIndexOf("\n", selectionStart - 1) + 1;
-                    var end = text.indexOf("\n", selectionEnd);
+                    var end = text.indexOf("\n", Math.max(start, selectionEnd - 1));
                     if (end < 0)
                         end = text.length;
-                    if (backend.insideFence(start))
+                    var lines = text.slice(start, end).split("\n");
+                    var first = lines.map(listItem).filter(Boolean)[0];
+                    if (!first || backend.insideFence(start))
                         return false;
 
-                    var block = text.slice(start, end);
-                    var firstShift = 0;
-                    var isList = false;
-                    var nested = block.split("\n").map(function(line, i) {
-                        var item = line.match(/^[ \t]*((?:[-+*]|\d+[.)])[ \t]+)/);
-                        if (!item)
-                            return line;
-                        isList = true;
-                        var width = item[1].length;
-                        var moved = direction > 0
-                            ? " ".repeat(width) + line
-                            : line.replace(new RegExp("^(\t| {1," + width + "})"), "");
-                        if (i === 0)
-                            firstShift = moved.length - line.length;
-                        return moved;
-                    }).join("\n");
-                    if (!isList)
-                        return false;
-                    if (nested === block)
+                    // Tab nests under the closest item above that is level with
+                    // the first one, Shift+Tab steps out beside the closest one
+                    // further out. A paragraph in between means the list ended.
+                    var depth = columns(first[1]);
+                    var above = text.slice(0, start).split("\n").reverse();
+                    var item = null;
+                    for (var i = 0; i < above.length && !item; i++) {
+                        var line = listItem(above[i]);
+                        if (!line && /^\S/.test(above[i]))
+                            break;
+                        if (line && (outdent ? columns(line[1]) < depth : columns(line[1]) <= depth))
+                            item = line;
+                    }
+                    var indent = item ? columns(item[1]) : 0;
+                    var target = outdent ? indent
+                        : item && indent === depth ? indent + item[2].length : depth;
+                    if (target === depth)
                         return true;
 
-                    var from = Math.max(0, selectionStart - start + firstShift);
-                    var to = Math.max(from, selectionEnd - start + nested.length - block.length);
-                    EditorMutations.replaceRange(editor, start, end, nested, from, to);
+                    // Every line moves by the same step, so nesting within the
+                    // selection is kept.
+                    var moved = lines.map(function(line) {
+                        var lead = line.match(/^[ \t]*/)[0];
+                        return /\S/.test(line)
+                            ? " ".repeat(Math.max(0, columns(lead) + target - depth)) + line.slice(lead.length)
+                            : line;
+                    });
+                    var nested = moved.join("\n");
+                    var from = Math.max(start, selectionStart + moved[0].length - lines[0].length);
+                    var to = Math.max(from, selectionEnd + nested.length - (end - start));
+                    var forward = cursorPosition === selectionEnd;
+                    replaceText(start, end, nested);
+                    select(forward ? from : to, forward ? to : from);
                     return true;
                 }
 
@@ -935,10 +958,10 @@ ApplicationWindow {
                         moveCursorVisibly(-1);
                         event.accepted = true;
                     } else if (!commandModifier
-                               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
-                        var outdent = event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier);
-                        if (indentListItems(outdent ? -1 : 1))
-                            event.accepted = true;
+                               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)
+                               && indentListItems(event.key === Qt.Key_Backtab
+                                                  || (event.modifiers & Qt.ShiftModifier))) {
+                        event.accepted = true;
                     } else if (!commandModifier
                                && (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)) {
                         movePage(event.key === Qt.Key_PageDown ? 1 : -1,

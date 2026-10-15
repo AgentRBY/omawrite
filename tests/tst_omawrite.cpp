@@ -1785,8 +1785,14 @@ private slots:
         auto tabKey = [&] { QTest::keyClick(window, Qt::Key_Tab); };
         auto backtabKey = [&] { QTest::keyClick(window, Qt::Key_Backtab, Qt::ShiftModifier); };
 
-        // An item nests by the width of its own marker, the caret rides
-        // along, and Shift+Tab puts it back.
+        auto selection = [&] {
+            return QStringLiteral("%1-%2@%3").arg(editor->property("selectionStart").toInt())
+                                             .arg(editor->property("selectionEnd").toInt())
+                                             .arg(caret());
+        };
+
+        // An item nests in line with the text of the item above, the caret
+        // rides along, and Shift+Tab puts it back.
         load(QStringLiteral("- one\n- two"), 11);
         tabKey();
         QCOMPARE(text(), QStringLiteral("- one\n  - two"));
@@ -1800,31 +1806,45 @@ private slots:
         QMetaObject::invokeMethod(editor, "undo");
         QCOMPARE(text(), QStringLiteral("- one\n- two"));
 
-        // The empty item Return leaves behind nests too.
+        // A wider marker above sets a deeper step, and Shift+Tab steps out
+        // beside the parent, however far in that sits.
         load(QStringLiteral("1. one"), 6);
         QTest::keyClick(window, Qt::Key_Return);
         tabKey();
         QCOMPARE(text(), QStringLiteral("1. one\n   2. "));
-
-        // A selection moves every item it touches.
-        load(QStringLiteral("- a\n- b\n- c"), 4);
-        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 11));
+        load(QStringLiteral("10. a\n- b"), 9);
         tabKey();
-        QCOMPARE(text(), QStringLiteral("- a\n  - b\n  - c"));
-
-        // An outermost item has nowhere to go, and a tab-indented one comes
-        // out all the same.
-        load(QStringLiteral("- a\n\t- b"), 1);
+        QCOMPARE(text(), QStringLiteral("10. a\n    - b"));
+        load(QStringLiteral("1. a\n   - b\n     - c"), 20);
         backtabKey();
-        QCOMPARE(text(), QStringLiteral("- a\n\t- b"));
+        QCOMPARE(text(), QStringLiteral("1. a\n   - b\n   - c"));
+
+        // The first item has nothing to nest under, an outermost one nowhere
+        // to go, and a tab-indented one comes out all the same.
+        load(QStringLiteral("- a"), 3);
+        tabKey();
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a"));
         load(QStringLiteral("- a\n\t- b"), 8);
         backtabKey();
         QCOMPARE(text(), QStringLiteral("- a\n- b"));
 
-        // Outside a list, and inside a code fence, Tab types a tab.
+        // A selection moves the items it touches together, keeping their
+        // depth and its own direction, but not a line it only reaches the
+        // start of.
+        load(QStringLiteral("- a\n- b\n  - c\n- d"), 14);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 4));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n  - b\n    - c\n- d"));
+        QCOMPARE(selection(), QStringLiteral("6-18@6"));
+
+        // Outside a list, on a rule, and inside a code fence, Tab types a tab.
         load(QStringLiteral("plain"), 5);
         tabKey();
         QCOMPARE(text(), QStringLiteral("plain\t"));
+        load(QStringLiteral("- a\n* * *"), 9);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n* * *\t"));
         load(QStringLiteral("```\n- a\n```"), 7);
         tabKey();
         QCOMPARE(text(), QStringLiteral("```\n- a\t\n```"));
