@@ -298,21 +298,26 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
                        {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
     }
 
-    // A pair rejected for landing in code resumes the search just past its
-    // opening delimiter, so `~~` in code cannot swallow a real ~~word~~ later.
-    static const QRegularExpression strikethroughRe(QStringLiteral("(~~)(.+?)(~~)"));
-    int strikeFrom = 0;
-    while (strikeFrom < text.length()) {
-        const QRegularExpressionMatch match = strikethroughRe.match(text, strikeFrom);
-        if (!match.hasMatch())
-            break;
-        if (insideCode(match)) {
-            strikeFrom = match.capturedStart(0) + 1;
+    // Pair ~~ delimiters left to right, skipping any inside a code span, so
+    // tildes in code neither open nor close a strikethrough around them.
+    QList<int> tildes;
+    for (int i = 0; i + 1 < text.length(); ++i) {
+        if (text.at(i) == QLatin1Char('~') && text.at(i + 1) == QLatin1Char('~')
+                && !codeCovers(i) && !codeCovers(i + 1)) {
+            tildes.append(i);
+            ++i;
+        }
+    }
+    for (int k = 0; k + 1 < tildes.size();) {
+        const int open = tildes.at(k);
+        const int close = tildes.at(k + 1);
+        if (close == open + 2) {
+            ++k;
             continue;
         }
-        markup.append({InlineKind::Strikethrough, span(match, 2),
-                       {span(match, 1), span(match, 3)}});
-        strikeFrom = match.capturedEnd(0);
+        markup.append({InlineKind::Strikethrough, {open + 2, close - open - 2},
+                       {{open, 2}, {close, 2}}});
+        k += 2;
     }
 
     static const QRegularExpression linkRe(

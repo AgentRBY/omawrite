@@ -435,6 +435,12 @@ private slots:
         QCOMPARE(after.size(), 1);
         QCOMPARE(after.at(0).content.start, 7);
         QCOMPARE(after.at(0).content.length, 4);
+
+        // Nor do they close one that encloses the code.
+        const auto around = MarkdownHighlighter::inlineMarkup(QStringLiteral("~~a `~~` b~~"));
+        QCOMPARE(around.size(), 1);
+        QCOMPARE(around.at(0).content.start, 2);
+        QCOMPARE(around.at(0).content.length, 8);
     }
 
     void strikesThroughNestedEmphasis() {
