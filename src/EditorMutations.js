@@ -79,7 +79,13 @@ function toggleWrap(editor, before, after) {
     // Markers beside space are literal, as in "2 * 3 * 4", not emphasis.
     var hugsContent = content.length === 0
         || (!/\s/.test(content.charAt(0)) && !/\s/.test(content.charAt(content.length - 1)));
-    if (left === right && holds(left) && standsAlone && hugsContent && !spansRuns(content)) {
+    // A backslash before the opening run makes it literal text.
+    var backslashes = 0;
+    for (var b = start - outsideBefore - 1; b >= 0 && text.charAt(b) === "\\"; --b)
+        ++backslashes;
+    var escaped = backslashes % 2 === 1;
+    if (left === right && holds(left) && standsAlone && hugsContent && !escaped
+            && !spansRuns(content)) {
         var keep = Array(left - size + 1).join(mark);
         var rangeStart = start - outsideBefore;
         replaceRange(editor, rangeStart, end + outsideAfter, keep + content + keep,
