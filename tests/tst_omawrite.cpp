@@ -184,6 +184,11 @@ private slots:
                  QStringLiteral("https://example.com/docs"));
         QVERIFY(MarkdownHighlighter::linkUrlAt(text, linkStart - 1).isEmpty());
         QVERIFY(MarkdownHighlighter::linkUrlAt(text, text.indexOf(QStringLiteral("https"))).isEmpty());
+
+        // Escaped punctuation, as the editor writes for parentheses, reads as itself.
+        const QString escaped = QStringLiteral(R"([wiki](https://example.com/a\(b\)))");
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(escaped, 1),
+                 QStringLiteral("https://example.com/a(b)"));
     }
 
     void showsLinkUrlOnlyOverTheLinkText() {

@@ -356,7 +356,12 @@ QString MarkdownHighlighter::linkUrlAt(const QString &text, int position) {
                 || position >= item.content.start + item.content.length) {
             continue;
         }
-        return text.mid(item.destination.start, item.destination.length);
+        // Markdown escapes punctuation in a destination, as the editor does
+        // for parentheses; show the URL itself.
+        static const QRegularExpression escapedPunctuation(
+            QStringLiteral(R"(\\([!-/:-@\[-`{-~]))"));
+        return text.mid(item.destination.start, item.destination.length)
+            .replace(escapedPunctuation, QStringLiteral("\\1"));
     }
     return {};
 }
