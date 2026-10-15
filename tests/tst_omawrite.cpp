@@ -240,8 +240,9 @@ private slots:
 
         // Lines written over others keep the line height, however many there are.
         editor->setProperty("text", QStringLiteral("aa\nbb\ncc"));
-        QMetaObject::invokeMethod(editor, "remove", Q_ARG(int, 0), Q_ARG(int, 5));
-        QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 0), Q_ARG(QString, QStringLiteral("X\nY")));
+        QGuiApplication::clipboard()->setText(QStringLiteral("X\nY"));
+        QMetaObject::invokeMethod(editor, "select", Q_ARG(int, 0), Q_ARG(int, 5));
+        QMetaObject::invokeMethod(editor, "paste");
         QCOMPARE(editor->property("text").toString(), QStringLiteral("X\nY\ncc"));
         QVERIFY(allLinesSpaced());
     }
@@ -349,6 +350,12 @@ private slots:
         QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
         QTest::keyClick(window, Qt::Key_Tab);
         QTRY_VERIFY(replaceField->property("activeFocus").toBool());
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("searchOpen").toBool());
+
+        // Escape closes the bar from the Replace field itself too.
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        QMetaObject::invokeMethod(replaceField, "forceActiveFocus");
         QTest::keyClick(window, Qt::Key_Escape);
         QVERIFY(!window->property("searchOpen").toBool());
 
