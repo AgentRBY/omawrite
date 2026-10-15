@@ -34,11 +34,20 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <iterator>
 
 #include "markdownhighlighter.h"
 
 constexpr qreal typoraLineHeightPercent = 140;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
+const QString textZoomSetting = QStringLiteral("text/zoom");
+
+// The user's own text size, multiplied onto the desktop's text scale.
+// Chromium's zoom ladder, trimmed to the range the whole window still reads
+// well at, so Ctrl+wheel here steps like Ctrl+wheel in a browser.
+constexpr qreal textZoomSteps[] = {0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0};
+constexpr int textZoomStepCount = int(std::size(textZoomSteps));
+
 const QString editorFontSetting = QStringLiteral("editor/font");
 
 // Noto ships a separate family per script, which buries every other font in
@@ -58,6 +67,17 @@ const QStringList genericFontAliases = {QStringLiteral("Monospace"), QStringLite
 const QRegularExpression symbolFontName(
     QStringLiteral("symbol|dingbat|emoji|icon|awesome|^D050000L$"),
     QRegularExpression::CaseInsensitiveOption);
+
+namespace {
+
+// A shade of `from` carried part of the way towards `to`.
+QColor blend(const QColor &from, const QColor &to, qreal amount) {
+    return QColor::fromRgbF(from.redF() + (to.redF() - from.redF()) * amount,
+                            from.greenF() + (to.greenF() - from.greenF()) * amount,
+                            from.blueF() + (to.blueF() - from.blueF()) * amount);
+}
+
+}
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
@@ -95,6 +115,15 @@ QString Backend::normalizedLinkUrl(const QString &clipboardText) {
 }
 
 Backend::Backend(QObject *parent) : QObject(parent) {
+    // A settings file truncated by a crash reads back as an empty value, and
+    // both that and a NaN would clamp to the smallest size rather than fall
+    // back to the default.
+    bool zoomOk = false;
+    const qreal storedZoom = QSettings().value(textZoomSetting, 1.0).toDouble(&zoomOk);
+    m_textZoom = zoomOk && storedZoom > 0 ? qBound(textZoomSteps[0], storedZoom,
+                                                   textZoomSteps[textZoomStepCount - 1])
+                                          : 1.0;
+
     const QString savedFont = QSettings().value(editorFontSetting).toString();
     m_editorFont = !savedFont.isEmpty() && QFontDatabase::hasFamily(savedFont)
         ? savedFont
@@ -194,11 +223,47 @@ void Backend::setDarkMode(bool darkMode) {
     emit darkModeChanged();
 }
 
-void Backend::setTextScale(qreal textScale) {
-    if (qFuzzyCompare(m_textScale, textScale))
+void Backend::setDesktopTextScale(qreal textScale) {
+    if (qFuzzyCompare(m_desktopTextScale, textScale))
         return;
 
-    m_textScale = textScale;
+    m_desktopTextScale = textScale;
+    emit textScaleChanged();
+}
+
+void Backend::increaseTextSize() {
+    setTextZoom(steppedTextZoom(1));
+}
+
+void Backend::decreaseTextSize() {
+    setTextZoom(steppedTextZoom(-1));
+}
+
+void Backend::resetTextSize() {
+    setTextZoom(1.0);
+}
+
+// The neighbouring rung, starting from whichever rung the current zoom sits
+// closest to; the ends of the ladder hold.
+qreal Backend::steppedTextZoom(int direction) const {
+    int closest = 0;
+    for (int step = 1; step < textZoomStepCount; ++step) {
+        if (qAbs(textZoomSteps[step] - m_textZoom) < qAbs(textZoomSteps[closest] - m_textZoom))
+            closest = step;
+    }
+
+    return textZoomSteps[qBound(0, closest + direction, textZoomStepCount - 1)];
+}
+
+void Backend::setTextZoom(qreal zoom) {
+    // Report the size even when the ladder has run out, so a keypress that
+    // changes nothing still says why.
+    setStatus(QStringLiteral("Text size %1%").arg(qRound(zoom * 100)));
+    if (qFuzzyCompare(m_textZoom, zoom))
+        return;
+
+    m_textZoom = zoom;
+    QSettings().setValue(textZoomSetting, zoom);
     emit textScaleChanged();
 }
 
@@ -216,7 +281,8 @@ void Backend::attachDocument(QObject *textDocument) {
     m_lastDocumentText = m_document->toPlainText();
     m_highlighter = new MarkdownHighlighter(m_document);
     m_highlighter->setDarkMode(m_darkMode);
-    m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent);
+    m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
+                             m_themeCodeBackground);
 
     connect(m_document, &QTextDocument::contentsChange, this,
             [this](int position, int, int charsAdded) {
@@ -295,6 +361,26 @@ void Backend::discardRecovery() {
     // that follows fails and leaves them in the editor. Opening a file or an
     // explicit save lifts this.
     suspendAutoSave();
+}
+
+// A file named on the command line need not exist yet: `omawrite new.md`
+// starts a blank document that the first save writes to that path. Opening
+// from the file picker or reloading still requires the file to be there.
+void Backend::openOrStartFile(const QUrl &url) {
+    const QFileInfo info(url.toLocalFile());
+    if (!url.isLocalFile() || info.exists() || !info.absoluteDir().exists()) {
+        open(url);
+        return;
+    }
+
+    loadDocumentText(QString());
+    clearRecovery();
+    // Nothing has been read, so no text counts as saved, and auto-save holds
+    // off until an explicit save creates the file (see autoSave()).
+    setKnownFileContents(QByteArray(), false);
+    setFileUrl(url);
+    setModified(false);
+    setStatus(QStringLiteral("New file %1").arg(fileName()));
 }
 
 void Backend::reloadFromDisk() {
@@ -464,6 +550,12 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     const QTextBlock block =
         m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
     if (!block.isValid())
+        return ranges;
+
+    // The highlighter leaves fenced code alone, so it hides nothing there. A
+    // closing fence is the line whose previous block is still inside.
+    if (block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
         return ranges;
 
     const int lineStart = block.position();
@@ -872,6 +964,7 @@ void Backend::loadOmarchyTheme() {
     QString selectionBackground;
     QString selectionForeground;
     QString brightForeground;
+    QString lighterBackground;
     QFile file(colorsPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
@@ -903,6 +996,8 @@ void Backend::loadOmarchyTheme() {
                 selectionForeground = value;
             else if (key == QStringLiteral("bright_foreground"))
                 brightForeground = value;
+            else if (key == QStringLiteral("lighter_background"))
+                lighterBackground = value;
         }
     }
 
@@ -944,9 +1039,21 @@ void Backend::loadOmarchyTheme() {
     applyColor(m_themeSelectionForeground, brightForeground);
     applyColor(m_themeSelectionForeground, selectionForeground);
 
+    // Omarchy themes name a lighter background for panels like the one code
+    // sits on, so use the shade the theme chose. Not every theme sets the key,
+    // and a few set it to the page background, which would leave code with no
+    // panel at all: mix a shade of the page towards the text for those. Mixing,
+    // unlike lightening, still moves on a pure black background.
+    const QColor page(m_themeBackground);
+    const QColor lighter(lighterBackground);
+    m_themeCodeBackground = (lighter.isValid() && lighter != page
+                                 ? lighter
+                                 : blend(page, QColor(m_themeForeground), 0.06)).name();
+
     if (m_highlighter) {
         m_highlighter->setDarkMode(m_darkMode);
-        m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent);
+        m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent,
+                                 m_themeCodeBackground);
     }
 
     if (darkModeFlipped)

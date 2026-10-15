@@ -19,22 +19,23 @@ void MarkdownHighlighter::setDarkMode(bool darkMode) {
     rehighlight();
 }
 
-// The hidden marker spacing is measured from the document's default font, so
-// it has to be remeasured whenever the editor switches typeface.
-void MarkdownHighlighter::refreshFont() {
-    rebuildFormats();
-    rehighlight();
-}
-
 void MarkdownHighlighter::setColors(const QString &background, const QString &foreground,
-                                    const QString &accent) {
+                                    const QString &accent, const QString &codeBackground) {
     if (m_customBackground == background && m_customForeground == foreground
-            && m_customAccent == accent)
+            && m_customAccent == accent && m_customCodeBackground == codeBackground)
         return;
 
     m_customBackground = background;
     m_customForeground = foreground;
     m_customAccent = accent;
+    m_customCodeBackground = codeBackground;
+    rebuildFormats();
+    rehighlight();
+}
+
+// The hidden marker spacing is measured from the document's default font, so
+// it has to be remeasured whenever the editor switches typeface.
+void MarkdownHighlighter::refreshFont() {
     rebuildFormats();
     rehighlight();
 }
@@ -57,8 +58,6 @@ void MarkdownHighlighter::rebuildFormats() {
     const QColor link = !m_customAccent.isEmpty() ? QColor(m_customAccent)
         : (m_darkMode ? QColor(QStringLiteral("#5584aa")) : QColor(QStringLiteral("#2077b2")));
     const QColor quote = marker;
-    const QColor codeBackground = m_darkMode ? QColor(QStringLiteral("#1c1a1a"))
-                                             : QColor(QStringLiteral("#f8f8f8"));
 
     m_markerFormat = QTextCharFormat();
     m_markerFormat.setForeground(marker);
@@ -92,7 +91,12 @@ void MarkdownHighlighter::rebuildFormats() {
 
     m_codeFormat = QTextCharFormat();
     m_codeFormat.setForeground(text);
-    m_codeFormat.setBackground(codeBackground);
+    if (!m_customCodeBackground.isEmpty())
+        m_codeFormat.setBackground(QColor(m_customCodeBackground));
+
+    // A fence recedes the way a heading's `#` does, over the panel it opens.
+    m_fenceFormat = m_codeFormat;
+    m_fenceFormat.setForeground(marker);
 
     m_quoteFormat = QTextCharFormat();
     m_quoteFormat.setForeground(quote);
@@ -111,6 +115,27 @@ void MarkdownHighlighter::rebuildFormats() {
 }
 
 void MarkdownHighlighter::highlightBlock(const QString &text) {
+    // A fenced run of code is literal from its opening fence through its
+    // closing one, so no markup runs inside it. The state rides from block to
+    // block, and Qt rehighlights the rest of the document when it changes.
+    const int previous = previousBlockState();
+    if (previous >= InsideFence) {
+        const bool closing = closesFence(text, previous - InsideFence + 3);
+        setCurrentBlockState(closing ? Prose : previous);
+        setFormat(0, text.length(), closing ? m_fenceFormat : m_codeFormat);
+        highlightSearch(text);
+        return;
+    }
+
+    const int opening = openingFenceLength(text);
+    if (opening > 0) {
+        setCurrentBlockState(InsideFence + opening - 3);
+        setFormat(0, text.length(), m_fenceFormat);
+        highlightSearch(text);
+        return;
+    }
+    setCurrentBlockState(Prose);
+
     if (!text.isEmpty()) {
         highlightMarkers(text);
         if (text.contains(QLatin1Char('`')) || text.contains(QLatin1Char('*'))
@@ -119,6 +144,21 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
         }
     }
     highlightSearch(text);
+}
+
+// Three or more backticks, indented at most three spaces. An info string may
+// follow, but not one with a backtick in it: "```code```" is inline code.
+int MarkdownHighlighter::openingFenceLength(const QString &text) {
+    static const QRegularExpression openingRe(QStringLiteral("^ {0,3}(`{3,})[^`]*$"));
+    const QRegularExpressionMatch match = openingRe.match(text);
+    return match.hasMatch() ? int(match.capturedLength(1)) : 0;
+}
+
+// At least as many backticks as opened the fence, and nothing after them.
+bool MarkdownHighlighter::closesFence(const QString &text, int openingLength) {
+    static const QRegularExpression closingRe(QStringLiteral("^ {0,3}(`{3,})\\s*$"));
+    const QRegularExpressionMatch match = closingRe.match(text);
+    return match.hasMatch() && match.capturedLength(1) >= openingLength;
 }
 
 void MarkdownHighlighter::highlightSearch(const QString &text) {
@@ -196,16 +236,40 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
             setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
     }
 
-    // Last, so a code span keeps its own styling where emphasis encloses it.
-    // setFormat replaces rather than merges, so whichever pass runs last wins.
-    if (text.contains(QLatin1Char('`'))) {
-        static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
-        QRegularExpressionMatchIterator codeMatches = codeRe.globalMatch(text);
-        while (codeMatches.hasNext()) {
-            const QRegularExpressionMatch match = codeMatches.next();
-            setFormat(match.capturedStart(0), match.capturedLength(0), m_codeFormat);
+    // setFormat replaces rather than merges. Code keeps its own styling even
+    // when emphasis or a link surrounds it.
+    for (const Span &code : codeSpans(text))
+        setFormat(code.start, code.length, m_codeFormat);
+}
+
+QList<MarkdownHighlighter::Span> MarkdownHighlighter::codeSpans(const QString &text) {
+    QList<Span> spans;
+    if (!text.contains(QLatin1Char('`')))
+        return spans;
+
+    static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
+    int from = 0;
+    while ((from = text.indexOf(QLatin1Char('`'), from)) >= 0) {
+        int backslashes = 0;
+        for (int i = from - 1; i >= 0 && text.at(i) == QLatin1Char('\\'); --i)
+            ++backslashes;
+        if (backslashes % 2 != 0) {
+            ++from;
+            continue;
         }
+
+        // Backslashes escape opening backticks in prose, but are literal once
+        // inside code, including immediately before the closing backtick.
+        const auto match = codeRe.match(text, from, QRegularExpression::NormalMatch,
+                                        QRegularExpression::AnchorAtOffsetMatchOption);
+        if (!match.hasMatch()) {
+            ++from;
+            continue;
+        }
+        spans.append({from, int(match.capturedLength(0))});
+        from = match.capturedEnd(0);
     }
+    return spans;
 }
 
 QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const QString &text) {
@@ -219,54 +283,49 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
         return Span{int(match.capturedStart(group)), int(match.capturedLength(group))};
     };
 
-    // A code span makes its own contents literal, so collect the code ranges
-    // first and reject any emphasis/link whose delimiters land inside one. It is
-    // the delimiters that are tested, not the whole match: markup may enclose a
-    // code span (`_a `b` c_`, `[see `code`](url)`) and still be real markup.
-    QList<Span> codeSpans;
-    if (text.contains(QLatin1Char('`'))) {
-        static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
-        QRegularExpressionMatchIterator codeMatches = codeRe.globalMatch(text);
-        while (codeMatches.hasNext())
-            codeSpans.append(span(codeMatches.next(), 0));
-    }
-    const auto codeCovers = [&codeSpans](int index) {
-        for (const Span &code : codeSpans) {
-            if (index >= code.start && index < code.start + code.length)
-                return true;
+    // Inline code is literal, so a `*`, `_` or `[` inside backticks is not a
+    // marker: `default_line_height` keeps its underscores. Markup whose
+    // markers land in a code span is dropped; markup that merely wraps one
+    // (**bold with `code` inside**) still applies.
+    const QList<Span> code = codeSpans(text);
+    const auto append = [&](const InlineMarkup &item) {
+        for (const Span &span : code) {
+            for (const Span &marker : item.markers) {
+                if (marker.start < span.start + span.length
+                        && span.start < marker.start + marker.length)
+                    return;
+            }
         }
-        return false;
-    };
-    const auto insideCode = [&codeCovers](const QRegularExpressionMatch &match) {
-        const int start = match.capturedStart(0);
-        const int end = start + match.capturedLength(0);
-        return codeCovers(start) || codeCovers(end - 1);
+        markup.append(item);
     };
 
-    static const QRegularExpression boldRe(QStringLiteral("(\\*\\*|__)(.+?)(\\1)"));
+    // Underscores only delimit emphasis at a word boundary, so identifiers such
+    // as snake_case_name read as themselves. Asterisks delimit anywhere.
+    static const QRegularExpression boldRe(
+        QStringLiteral("\\*\\*(.+?)\\*\\*|(?<!\\w)__(.+?)__(?!\\w)"),
+        QRegularExpression::UseUnicodePropertiesOption);
     QRegularExpressionMatchIterator boldMatches = boldRe.globalMatch(text);
     while (boldMatches.hasNext()) {
         const QRegularExpressionMatch match = boldMatches.next();
-        if (insideCode(match))
-            continue;
-        markup.append({InlineKind::Bold, span(match, 2),
-                       {span(match, 1), span(match, 3)}});
+        const Span whole = span(match, 0);
+        const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
+        append({InlineKind::Bold, span(match, contentIndex),
+                {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
     }
 
-    // An emphasis delimiter may not be followed (opening) or preceded
+    // An asterisk delimiter may not be followed (opening) or preceded
     // (closing) by whitespace, so `* first *important* point` keeps its bullet
     // and `2 * 3 * 4` stays literal instead of pairing stray asterisks.
     static const QRegularExpression italicRe(
-        QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!_)_([^_\\n]+)_(?!_)"));
+        QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
+        QRegularExpression::UseUnicodePropertiesOption);
     QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(text);
     while (italicMatches.hasNext()) {
         const QRegularExpressionMatch match = italicMatches.next();
-        if (insideCode(match))
-            continue;
         const Span whole = span(match, 0);
         const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
-        markup.append({InlineKind::Italic, span(match, contentIndex),
-                       {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
+        append({InlineKind::Italic, span(match, contentIndex),
+                {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
     }
 
     static const QRegularExpression linkRe(
@@ -274,15 +333,13 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     QRegularExpressionMatchIterator linkMatches = linkRe.globalMatch(text);
     while (linkMatches.hasNext()) {
         const QRegularExpressionMatch match = linkMatches.next();
-        if (insideCode(match))
-            continue;
         const Span whole = span(match, 0);
         const Span content = span(match, 1);
         const int contentEnd = content.start + content.length;
-        markup.append({InlineKind::Link, content,
-                       {{whole.start, 1},
-                        {contentEnd, whole.start + whole.length - contentEnd}},
-                       span(match, 2)});
+        append({InlineKind::Link, content,
+                {{whole.start, 1},
+                 {contentEnd, whole.start + whole.length - contentEnd}},
+                span(match, 2)});
     }
 
     return markup;
