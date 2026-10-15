@@ -263,8 +263,11 @@ ApplicationWindow {
         }
 
         function onSaveSucceeded() {
+            // Only a save the writer chose in the prompt carries out the
+            // pending close or open, never an auto-save that lands meanwhile.
+            const confirmed = win.awaitingPendingSave;
             win.awaitingPendingSave = false;
-            if (win.pendingAction !== "")
+            if (confirmed && win.pendingAction !== "")
                 win.completePendingAction();
         }
 
@@ -306,6 +309,11 @@ ApplicationWindow {
         activeButtonColor: backend.themeAccent
         containerWidth: win.width
         containerHeight: win.height
+
+        // Discard must still mean discard, so nothing is auto-saved while
+        // the writer decides.
+        onAboutToShow: backend.holdAutoSave(true)
+        onClosed: backend.holdAutoSave(false)
 
         onDiscardRequested: {
             backend.discardRecovery();

@@ -27,8 +27,13 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - In the unsaved-changes dialog, `Alt+C`, `Alt+D`, and `Alt+S` choose Cancel,
   Discard, and Save.
 
-Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
-and warns before an external change can replace local work.
+Once a document has been saved to a file, edits are auto-saved to that file a
+moment after you stop typing, so `Ctrl+S` is rarely needed. Untitled drafts are
+never auto-saved — they wait for an explicit save so Omawrite never picks a file
+name for you. Unsaved drafts are recovered after an abnormal exit. Omawrite also
+watches open files and warns before an external change can replace local work;
+auto-save pauses until you reload, keep your version, or save. A recovered draft
+is never auto-saved over its file — save it to keep it.
 
 The font button in the footer picks the writing font from any installed text font,
 and Omawrite remembers the choice. IBM Plex Mono is the default.

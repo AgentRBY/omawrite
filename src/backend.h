@@ -76,6 +76,7 @@ public:
     Q_INVOKABLE void discardRecovery();
     Q_INVOKABLE void reloadFromDisk();
     Q_INVOKABLE void keepExternalVersion();
+    Q_INVOKABLE void holdAutoSave(bool held);
     Q_INVOKABLE void printDocument();
     Q_INVOKABLE void copyAsHtml();
     Q_INVOKABLE void newWindow();
@@ -106,6 +107,8 @@ signals:
     void externalChangeDetected(bool deleted, bool locallyModified);
 
 private:
+    friend class OmawriteTest;
+
     void loadDocumentText(const QString &text);
     void setFileUrl(const QUrl &url);
     void setModified(bool modified);
@@ -120,6 +123,9 @@ private:
     void reapplyTypographyToChange();
     void scheduleRecovery();
     void writeRecovery();
+    void scheduleAutoSave();
+    void autoSave();
+    void suspendAutoSave();
     void restoreRecovery();
     void clearRecovery();
     QString recoveryPath() const;
@@ -142,6 +148,7 @@ private:
     int m_lastChangeAdded = 0;
     QTimer m_wordCountTimer;
     QTimer m_recoveryTimer;
+    QTimer m_autoSaveTimer;
     QFileSystemWatcher m_fileWatcher;
     QPointer<QTextDocument> m_document;
     QPointer<QWindow> m_parentWindow;
@@ -150,6 +157,8 @@ private:
     QByteArray m_lastKnownFileContents;
     QString m_lastKnownFileText;
     bool m_hasKnownFileContents = false;
+    bool m_autoSaveSuspended = false;
+    bool m_autoSaveHeld = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
 
