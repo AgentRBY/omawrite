@@ -509,6 +509,7 @@ private slots:
                 property string caretInsideAccentedBold
                 property string literalAsterisks
                 property string escapedTildes
+                property string escapedClosingTildes
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -602,6 +603,11 @@ private slots:
                     select(3, 7);
                     EditorMutations.toggleWrap(this, "~~", "~~");
                     escapedTildes = text;
+
+                    text = "~~word\\~~";
+                    selectAll();
+                    EditorMutations.toggleWrap(this, "~~", "~~");
+                    escapedClosingTildes = text;
                 }
             }
         )QML";
@@ -643,6 +649,8 @@ private slots:
                  QStringLiteral("****a**,**b****"));
         QCOMPARE(editor->property("escapedTildes").toString(),
                  QStringLiteral("\\~~~~word~~~~"));
+        QCOMPARE(editor->property("escapedClosingTildes").toString(),
+                 QStringLiteral("~~~~word\\~~~~"));
         QCOMPARE(editor->property("literalAsterisks").toString(),
                  QStringLiteral("2 ** 3 ** 4"));
         QVERIFY(editor->property("caretInsideAccentedBold").toString()
