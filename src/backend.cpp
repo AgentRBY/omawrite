@@ -578,6 +578,55 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     return ranges;
 }
 
+// The emphasis span of the marker's kind that the caret sits in or against,
+// in document positions, so a toggle with nothing selected can act on it.
+QVariantMap Backend::emphasisSpanAt(int position, const QString &marker) const {
+    if (!m_document)
+        return {};
+
+    const QTextBlock block =
+        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
+    if (!block.isValid() || block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
+        return {};
+
+    using Kind = MarkdownHighlighter::InlineKind;
+    const Kind kind = marker == QStringLiteral("**") ? Kind::Bold
+        : marker == QStringLiteral("~~")              ? Kind::Strikethrough
+                                                      : Kind::Italic;
+    const int offset = position - block.position();
+    const QList<MarkdownHighlighter::InlineMarkup> markup =
+        MarkdownHighlighter::inlineMarkup(block.text());
+    for (const auto &item : markup) {
+        const int start = item.markers[0].start;
+        const int end = item.markers[1].start + item.markers[1].length;
+        if (item.kind != kind || offset < start || offset > end)
+            continue;
+        // The visible text ends before the chain of nested emphasis closing
+        // with it, as the italic "*" inside "***word***".
+        const int contentEnd = item.content.start + item.content.length;
+        int textEnd = contentEnd;
+        for (bool moved = true; moved;) {
+            moved = false;
+            for (const auto &nested : markup) {
+                const auto &closing = nested.markers[1];
+                if (closing.start >= item.content.start && closing.length > 0
+                        && closing.start + closing.length == textEnd) {
+                    textEnd = closing.start;
+                    moved = true;
+                }
+            }
+        }
+        const int base = block.position();
+        return {{QStringLiteral("start"), base + start},
+                {QStringLiteral("end"), base + end},
+                {QStringLiteral("contentStart"), base + item.content.start},
+                {QStringLiteral("contentEnd"), base + contentEnd},
+                {QStringLiteral("textEnd"), base + textEnd}};
+    }
+    return {};
+}
+
 QString Backend::linkUrlAt(int position) const {
     if (!m_document)
         return {};
