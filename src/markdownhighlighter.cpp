@@ -298,14 +298,21 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
                        {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
     }
 
+    // A pair rejected for landing in code resumes the search just past its
+    // opening delimiter, so `~~` in code cannot swallow a real ~~word~~ later.
     static const QRegularExpression strikethroughRe(QStringLiteral("(~~)(.+?)(~~)"));
-    QRegularExpressionMatchIterator strikethroughMatches = strikethroughRe.globalMatch(text);
-    while (strikethroughMatches.hasNext()) {
-        const QRegularExpressionMatch match = strikethroughMatches.next();
-        if (insideCode(match))
+    int strikeFrom = 0;
+    while (strikeFrom < text.length()) {
+        const QRegularExpressionMatch match = strikethroughRe.match(text, strikeFrom);
+        if (!match.hasMatch())
+            break;
+        if (insideCode(match)) {
+            strikeFrom = match.capturedStart(0) + 1;
             continue;
+        }
         markup.append({InlineKind::Strikethrough, span(match, 2),
                        {span(match, 1), span(match, 3)}});
+        strikeFrom = match.capturedEnd(0);
     }
 
     static const QRegularExpression linkRe(

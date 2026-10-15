@@ -429,6 +429,12 @@ private slots:
             MarkdownHighlighter::inlineMarkup(QStringLiteral("~~struck `code` too~~"));
         QCOMPARE(markup.size(), 1);
         QCOMPARE(markup.at(0).kind, MarkdownHighlighter::InlineKind::Strikethrough);
+
+        // Tildes in code do not pair with a real strikethrough after it.
+        const auto after = MarkdownHighlighter::inlineMarkup(QStringLiteral("`~~` ~~word~~"));
+        QCOMPARE(after.size(), 1);
+        QCOMPARE(after.at(0).content.start, 7);
+        QCOMPARE(after.at(0).content.length, 4);
     }
 
     void strikesThroughNestedEmphasis() {
