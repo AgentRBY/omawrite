@@ -1224,6 +1224,33 @@ private slots:
         QCOMPARE(readFile(path), QByteArray("original"));
     }
 
+    void forgetsTheSavedTextWhenTheFileChangedUnseen() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("draft.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("original"));
+        QVERIFY(backend.editorTextChanged());
+        backend.saveAs(QUrl::fromLocalFile(path));
+
+        // The file changes without the watcher noticing; the pre-save check
+        // catches it.
+        QSignalSpy externalSpy(&backend, &Backend::externalChangeDetected);
+        writeFileUnwatched(backend, path, "theirs");
+        editor->setProperty("text", QStringLiteral("mine"));
+        QVERIFY(backend.editorTextChanged());
+        QTRY_VERIFY(externalSpy.count() >= 1);
+
+        // Undoing back to the old text is not a return to what is on disk.
+        editor->setProperty("text", QStringLiteral("original"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+        backend.discardRecovery();
+    }
+
     void doesNotAutoSaveARecoveredDraftOverItsFile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

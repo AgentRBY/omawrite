@@ -750,6 +750,9 @@ void Backend::autoSave() {
     // Read as open() does, so CRLF files compare equal to what we loaded.
     if (!exists || !file.open(QIODevice::ReadOnly | QIODevice::Text)
             || file.readAll() != m_lastKnownFileContents) {
+        // As in the watcher: what we last read is no longer on disk, so it
+        // cannot count as saved until the writer picks a version.
+        setKnownFileContents(QByteArray(), false);
         suspendAutoSave();
         emit externalChangeDetected(!exists, m_modified);
         return;
