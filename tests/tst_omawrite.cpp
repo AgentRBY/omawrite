@@ -497,6 +497,7 @@ private slots:
                 property string boldAroundItalic
                 property string boldAroundBold
                 property string caretInsideBoldDelimiter
+                property string boldRunsAroundComma
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -570,6 +571,11 @@ private slots:
                     cursorPosition = 1;
                     EditorMutations.toggleWrap(this, "*", "*");
                     caretInsideBoldDelimiter = text;
+
+                    text = "**a**,**b**";
+                    selectAll();
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    boldRunsAroundComma = text;
                 }
             }
         )QML";
@@ -603,7 +609,12 @@ private slots:
         QCOMPARE(editor->property("italicAroundNestedBold").toString(),
                  QStringLiteral("a **b** c"));
         QCOMPARE(editor->property("boldAroundItalic").toString(), QStringLiteral("*word*"));
-        QCOMPARE(editor->property("boldAroundBold").toString(), QStringLiteral("a **b** c"));
+        // A wrapper around same-kind emphasis is left for undo rather than
+        // risk unpairing separate runs.
+        QCOMPARE(editor->property("boldAroundBold").toString(),
+                 QStringLiteral("****a **b** c****"));
+        QCOMPARE(editor->property("boldRunsAroundComma").toString(),
+                 QStringLiteral("****a**,**b****"));
         // Half of a bold delimiter is not an empty italic pair to remove.
         QVERIFY(editor->property("caretInsideBoldDelimiter").toString()
                     .endsWith(QStringLiteral("word**")));
