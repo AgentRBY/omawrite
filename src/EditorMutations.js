@@ -35,9 +35,26 @@ function replaceRange(editor, rangeStart, rangeEnd, replacement,
 // Unwraps when the marker is already there, selected or just outside the
 // selection, and wraps otherwise. A marker only counts as a whole run, so the
 // "*" of "**bold**" is not taken for italic; "***" counts as both.
-function toggleWrap(editor, marker) {
+//
+// With nothing selected it acts on the span around the caret: at the end of
+// its text the caret steps past the closing marker, so typing carries on
+// plain (and steps back in on a second press); anywhere else in it the span
+// comes off.
+function toggleWrap(editor, marker, span) {
     var start = editor.selectionStart;
     var end = editor.selectionEnd;
+    if (start === end && span && span.start !== undefined) {
+        if (start === span.end) {
+            editor.cursorPosition = span.contentEnd;
+        } else if (start >= span.contentEnd) {
+            editor.cursorPosition = span.end;
+        } else {
+            var content = editor.text.slice(span.contentStart, span.contentEnd);
+            var caret = Math.max(0, start - span.contentStart);
+            replaceRange(editor, span.start, span.end, content, caret, caret);
+        }
+        return;
+    }
     var text = editor.text;
     var size = marker.length;
     var mark = marker.charAt(0);

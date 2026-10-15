@@ -90,6 +90,7 @@ public:
     Q_INVOKABLE bool editorTextChanged();
     Q_INVOKABLE QVariantList hiddenRangesAt(int position) const;
     Q_INVOKABLE QString linkUrlAt(int position) const;
+    Q_INVOKABLE QVariantMap emphasisSpanAt(int position, const QString &marker) const;
     Q_INVOKABLE int cursorPositionStep(int position, int direction) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
     Q_INVOKABLE QVariantList searchMatches(const QString &query) const;

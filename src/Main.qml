@@ -650,7 +650,8 @@ ApplicationWindow {
 
                 function wrapSelection(marker) {
                     forceActiveFocus();
-                    EditorMutations.toggleWrap(editor, marker);
+                    EditorMutations.toggleWrap(editor, marker,
+                                               backend.emphasisSpanAt(cursorPosition, marker));
                 }
 
                 function insertLink() {

@@ -494,6 +494,64 @@ private slots:
         QCOMPARE(editor->property("text").toString(), QStringLiteral("~~~\ncode\n"));
     }
 
+    void togglesEmphasisAtTheCaret() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+
+        const auto type = [window](const QString &keys) {
+            for (const QChar key : keys)
+                QTest::keyClick(window, key.toLatin1());
+        };
+        const auto bold = [window] { QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier); };
+        const auto text = [editor] { return editor->property("text").toString(); };
+
+        // Ctrl+B, type, Ctrl+B ends the bold instead of stacking markers.
+        editor->setProperty("text", QStringLiteral("a "));
+        editor->setProperty("cursorPosition", 2);
+        bold();
+        type(QStringLiteral("hi"));
+        bold();
+        type(QStringLiteral(" more"));
+        QCOMPARE(text(), QStringLiteral("a **hi** more"));
+
+        // Just past the closing marker, Ctrl+B steps back into the bold.
+        editor->setProperty("text", QStringLiteral("a **hi**"));
+        editor->setProperty("cursorPosition", 8);
+        bold();
+        type(QStringLiteral("!"));
+        QCOMPARE(text(), QStringLiteral("a **hi!**"));
+
+        // Inside the bold, Ctrl+B takes it off and keeps the caret in place.
+        editor->setProperty("text", QStringLiteral("a **hello** b"));
+        editor->setProperty("cursorPosition", 6);
+        bold();
+        QCOMPARE(text(), QStringLiteral("a hello b"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 4);
+
+        // Italic works the same way.
+        editor->setProperty("text", QStringLiteral("a "));
+        editor->setProperty("cursorPosition", 2);
+        QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+        type(QStringLiteral("hi"));
+        QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+        type(QStringLiteral(" x"));
+        QCOMPARE(text(), QStringLiteral("a *hi* x"));
+    }
+
     void togglesEmphasisMarkers() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());

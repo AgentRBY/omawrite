@@ -578,6 +578,37 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     return ranges;
 }
 
+// The emphasis span of the marker's kind that the caret sits in or against,
+// in document positions, so a toggle with nothing selected can act on it.
+QVariantMap Backend::emphasisSpanAt(int position, const QString &marker) const {
+    if (!m_document)
+        return {};
+
+    const QTextBlock block =
+        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
+    if (!block.isValid() || block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
+        return {};
+
+    using Kind = MarkdownHighlighter::InlineKind;
+    const Kind kind = marker == QStringLiteral("**") ? Kind::Bold
+        : marker == QStringLiteral("~~")              ? Kind::Strikethrough
+                                                      : Kind::Italic;
+    const int offset = position - block.position();
+    for (const auto &item : MarkdownHighlighter::inlineMarkup(block.text())) {
+        const int start = item.markers[0].start;
+        const int end = item.markers[1].start + item.markers[1].length;
+        if (item.kind != kind || offset < start || offset > end)
+            continue;
+        const int base = block.position();
+        return {{QStringLiteral("start"), base + start},
+                {QStringLiteral("end"), base + end},
+                {QStringLiteral("contentStart"), base + item.content.start},
+                {QStringLiteral("contentEnd"), base + item.content.start + item.content.length}};
+    }
+    return {};
+}
+
 QString Backend::linkUrlAt(int position) const {
     if (!m_document)
         return {};
