@@ -12,6 +12,7 @@
 #include <memory>
 
 class MarkdownHighlighter;
+class QFont;
 class QTextDocument;
 class QWindow;
 class QLockFile;
@@ -63,6 +64,8 @@ public:
     static int countWords(const QString &text);
     static QString normalizedLinkUrl(const QString &clipboardText);
     static QString suggestedFileName(const QString &text);
+    static QString tomlValue(const QString &text);
+    static QFont printFont(const QFont &editorFont, qreal screenDpi);
 
     Q_INVOKABLE void attachDocument(QObject *textDocument);
     Q_INVOKABLE void openDialog();
@@ -78,7 +81,9 @@ public:
     Q_INVOKABLE void increaseTextSize();
     Q_INVOKABLE void decreaseTextSize();
     Q_INVOKABLE void resetTextSize();
+    Q_INVOKABLE void holdAutoSave(bool held);
     Q_INVOKABLE void printDocument();
+    Q_INVOKABLE void copyAsHtml();
     Q_INVOKABLE void newWindow();
     Q_INVOKABLE QString clipboardUrl() const;
     Q_INVOKABLE QString clipboardText() const;
@@ -107,6 +112,8 @@ signals:
     void externalChangeDetected(bool deleted, bool locallyModified);
 
 private:
+    friend class OmawriteTest;
+
     void loadDocumentText(const QString &text);
     qreal steppedTextZoom(int direction) const;
     void setTextZoom(qreal zoom);
@@ -123,9 +130,13 @@ private:
     void reapplyTypographyToChange();
     void scheduleRecovery();
     void writeRecovery();
+    void scheduleAutoSave();
+    void autoSave();
+    void suspendAutoSave();
     void restoreRecovery();
     void clearRecovery();
     QString recoveryPath() const;
+    void setKnownFileContents(const QByteArray &contents, bool known);
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
@@ -145,13 +156,17 @@ private:
     int m_lastChangeAdded = 0;
     QTimer m_wordCountTimer;
     QTimer m_recoveryTimer;
+    QTimer m_autoSaveTimer;
     QFileSystemWatcher m_fileWatcher;
     QPointer<QTextDocument> m_document;
     QPointer<QWindow> m_parentWindow;
     QPointer<MarkdownHighlighter> m_highlighter;
     QString m_lastDocumentText;
     QByteArray m_lastKnownFileContents;
+    QString m_lastKnownFileText;
     bool m_hasKnownFileContents = false;
+    bool m_autoSaveSuspended = false;
+    bool m_autoSaveHeld = false;
     QString m_recoveryPath;
     std::unique_ptr<QLockFile> m_recoveryLock;
 

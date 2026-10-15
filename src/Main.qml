@@ -226,6 +226,12 @@ ApplicationWindow {
     }
 
     Shortcut {
+        sequence: "Ctrl+Shift+C"
+        context: Qt.ApplicationShortcut
+        onActivated: backend.copyAsHtml()
+    }
+
+    Shortcut {
         sequences: ["Meta+F", "F11"]
         context: Qt.ApplicationShortcut
         onActivated: toggleFullScreen()
@@ -278,8 +284,11 @@ ApplicationWindow {
         }
 
         function onSaveSucceeded() {
+            // Only a save the writer chose in the prompt carries out the
+            // pending close or open, never an auto-save that lands meanwhile.
+            const confirmed = win.awaitingPendingSave;
             win.awaitingPendingSave = false;
-            if (win.pendingAction !== "")
+            if (confirmed && win.pendingAction !== "")
                 win.completePendingAction();
         }
 
@@ -322,6 +331,11 @@ ApplicationWindow {
         containerWidth: win.width
         containerHeight: win.height
 
+        // Discard must still mean discard, so nothing is auto-saved while
+        // the writer decides.
+        onAboutToShow: backend.holdAutoSave(true)
+        onClosed: backend.holdAutoSave(false)
+
         onDiscardRequested: {
             backend.discardRecovery();
             win.completePendingAction();
@@ -358,7 +372,7 @@ ApplicationWindow {
         // (Material Dialog.qml:14); as a child, the default content item sizes
         // to it without the feedback.
         Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+P  Print\nCtrl+= / Ctrl+-  Text Size\nCtrl+0  Reset Text Size\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+Shift+C  Copy as HTML\nCtrl+P  Print\nCtrl+= / Ctrl+-  Text Size\nCtrl+0  Reset Text Size\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
             lineHeight: 1.5
         }
     }
@@ -389,8 +403,12 @@ ApplicationWindow {
                 active: hovered || pressed || wheelScroll.running || scrollLinger.running
             }
 
+            // Also lingers after paging through the document from the
+            // keyboard, so the bar shows where the jump landed. Writing past
+            // the bottom edge scrolls too, but leaves the bar hidden.
             Timer {
                 id: scrollLinger
+                objectName: "scrollLinger"
                 interval: 600
             }
 
@@ -685,6 +703,22 @@ ApplicationWindow {
                         }
                         return;
                     }
+                    // A new paragraph stands apart from the one above it by a
+                    // blank line, which is the second break here. A line that
+                    // is already blank has nothing to stand apart from, so
+                    // that break would only be a gap nobody asked for.
+                    // The break lands on what the selection leaves behind, which
+                    // is not the caret's line when it was dragged right to left.
+                    var start = Math.min(selectionStart, selectionEnd);
+                    var end = Math.max(selectionStart, selectionEnd);
+                    var head = text.slice(text.lastIndexOf("\n", start - 1) + 1, start);
+                    var lineEnd = text.indexOf("\n", end);
+                    var rest = lineEnd < 0 ? text.slice(end)
+                                           : text.slice(end, lineEnd);
+                    if (/^\s*$/.test(head) && /^\s*$/.test(rest)) {
+                        replaceSelectionWith("\n");
+                        return;
+                    }
                     replaceSelectionWith("\n\n");
                 }
 
@@ -788,6 +822,39 @@ ApplicationWindow {
                         return false;
 
                     var start = cursorPosition - 2;
+                    var lineEnd = text.indexOf("\n", cursorPosition);
+                    var line = lineEnd < 0 ? text.slice(cursorPosition)
+                                           : text.slice(cursorPosition, lineEnd);
+                    // Something on the caret's line and the pair above it is a
+                    // paragraph break and nothing else, either the one Return
+                    // wrote to end a paragraph or the one the writer is now
+                    // closing to join what it separates. Both breaks go.
+                    if (/^\s*$/.test(line)) {
+                        // On a blank line Return writes a single break, so up
+                        // here the pair may be that break and one that was
+                        // already in the document. Above a blank line Return
+                        // writes a single break too, and so wrote neither of
+                        // these.
+                        var above = text.slice(text.lastIndexOf("\n", start - 1) + 1, start);
+                        if (/^\s*$/.test(above))
+                            return false;
+                        // Past that the two Returns leave the same text and the
+                        // same caret, and no reading of either says which was
+                        // pressed. What decides instead is that the gap is left
+                        // standing: both breaks go only while a blank line of
+                        // it survives them. The end of the document below the
+                        // caret leaves it none...
+                        if (lineEnd < 0)
+                            return false;
+                        // ...and so does the next paragraph, which the pair
+                        // would otherwise be pulled up against.
+                        var belowEnd = text.indexOf("\n", lineEnd + 1);
+                        var below = belowEnd < 0 ? text.slice(lineEnd + 1)
+                                                 : text.slice(lineEnd + 1, belowEnd);
+                        if (!/^\s*$/.test(below))
+                            return false;
+                    }
+
                     remove(start, cursorPosition);
                     cursorPosition = start;
                     return true;
@@ -807,6 +874,12 @@ ApplicationWindow {
                         event.accepted = true;
                         return;
                     }
+
+                    var pageKey = event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp;
+                    var documentEdgeKey = (event.key === Qt.Key_Home || event.key === Qt.Key_End)
+                        && (event.modifiers & Qt.ControlModifier);
+                    if (pageKey || documentEdgeKey)
+                        scrollLinger.restart();
 
                     var returnKey = event.key === Qt.Key_Return || event.key === Qt.Key_Enter;
                     var commandModifier = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier);
