@@ -297,6 +297,26 @@ void Backend::discardRecovery() {
     suspendAutoSave();
 }
 
+// A file named on the command line need not exist yet: `omawrite new.md`
+// starts a blank document that the first save writes to that path. Opening
+// from the file picker or reloading still requires the file to be there.
+void Backend::openOrStartFile(const QUrl &url) {
+    const QFileInfo info(url.toLocalFile());
+    if (!url.isLocalFile() || info.exists() || !info.absoluteDir().exists()) {
+        open(url);
+        return;
+    }
+
+    loadDocumentText(QString());
+    clearRecovery();
+    // Nothing has been read, so no text counts as saved, and auto-save holds
+    // off until an explicit save creates the file (see autoSave()).
+    setKnownFileContents(QByteArray(), false);
+    setFileUrl(url);
+    setModified(false);
+    setStatus(QStringLiteral("New file %1").arg(fileName()));
+}
+
 void Backend::reloadFromDisk() {
     if (m_fileUrl.isLocalFile())
         open(m_fileUrl);
