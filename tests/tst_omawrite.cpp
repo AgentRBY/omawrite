@@ -549,6 +549,13 @@ private slots:
         QCOMPARE(text(), QStringLiteral("***hello***"));
         QCOMPARE(editor->property("cursorPosition").toInt(), 11);
 
+        // Through several layers of nesting too.
+        editor->setProperty("text", QStringLiteral("**~~*hello*~~**"));
+        editor->setProperty("cursorPosition", 10);
+        bold();
+        QCOMPARE(text(), QStringLiteral("**~~*hello*~~**"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 15);
+
         // A literal underscore at the end is text, not a closing marker.
         editor->setProperty("text", QStringLiteral("**value_**"));
         editor->setProperty("cursorPosition", 7);
