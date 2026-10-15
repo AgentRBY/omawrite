@@ -676,12 +676,24 @@ void Backend::replaceRange(int start, int end, const QString &text) {
     cursor.endEditBlock();
 }
 
+// A block's state says what follows its line, so a fence line itself is only
+// code on its inner side: past an opening fence's backticks, or anywhere
+// before the end of a closing one.
 bool Backend::insideFence(int position) const {
     if (!m_document)
         return false;
     const QTextBlock block =
         m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
-    return block.isValid() && block.userState() >= MarkdownHighlighter::InsideFence;
+    if (!block.isValid())
+        return false;
+    const bool opensOrContinues = block.userState() >= MarkdownHighlighter::InsideFence;
+    const bool afterOpening = block.previous().userState() >= MarkdownHighlighter::InsideFence;
+    const int offset = position - block.position();
+    if (opensOrContinues && !afterOpening)
+        return offset >= block.text().indexOf(QLatin1Char('`')) + 3;
+    if (afterOpening && !opensOrContinues)
+        return offset < block.text().length();
+    return opensOrContinues;
 }
 
 void Backend::openExternalUrl(const QUrl &url) {

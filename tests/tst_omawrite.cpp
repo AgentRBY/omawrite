@@ -439,6 +439,18 @@ private slots:
         editor->setProperty("cursorPosition", text.length());
         QTest::keyClick(window, Qt::Key_Return);
         QCOMPARE(editor->property("text").toString(), text + QStringLiteral("\n\n"));
+
+        // Before a closing fence the caret is still in the code; before an
+        // opening one it is not yet.
+        editor->setProperty("text", QStringLiteral("```\ncode\n```"));
+        editor->setProperty("cursorPosition", 9);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("```\ncode\n\n```"));
+        editor->setProperty("text", QStringLiteral("para\n```\ncode\n```"));
+        editor->setProperty("cursorPosition", 5);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("para\n\n\n```\ncode\n```"));
     }
 
     void togglesEmphasisMarkers() {
