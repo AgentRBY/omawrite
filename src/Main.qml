@@ -357,7 +357,6 @@ ApplicationWindow {
     }
 
     Item {
-        id: contentRoot
         anchors.fill: parent
 
         Flickable {
@@ -497,7 +496,7 @@ ApplicationWindow {
             }
 
             onMovementStarted: wheelScroll.stop()
-            onContentYChanged: editor.refreshLinkHover()
+            onContentYChanged: editor.hoveredLinkUrl = ""
 
             function scrollByWheel(wheel) {
                 // High-resolution wheels report fractional notches; feed
@@ -855,10 +854,7 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
-                    // An edit under a resting pointer can remove or change the
-                    // link it was showing.
-                    if (hoveredLinkUrl.length > 0)
-                        Qt.callLater(refreshLinkHover);
+                    hoveredLinkUrl = "";
                     if (win.searchUpdating)
                         return;
                     var contentChanged = backend.editorTextChanged();
@@ -880,113 +876,54 @@ ApplicationWindow {
                 property string hoveredLinkUrl: ""
                 property real linkHoverX: 0
                 property real linkHoverY: 0
-                property real linkHoverRootX: 0
-                property real linkHoverRootY: 0
 
-                function updateLinkHover(x, y) {
-                    var rootPoint = editor.mapToItem(contentRoot, x, y);
-                    linkHoverRootX = rootPoint.x;
-                    linkHoverRootY = rootPoint.y;
-                    linkHoverX = x;
-                    linkHoverY = y;
-                    hoveredLinkUrl = linkUrlUnder(x, y);
-                }
-
-                // positionAt() snaps to the nearest caret position, so past the
-                // end of a line it still lands on the last character. Only count
-                // a character the pointer is actually over: the one on either side
-                // of that caret position, whichever way the text runs.
-                function characterUnder(x, y) {
-                    var caret = positionAt(x, y);
-                    for (var position = caret; position >= caret - 1; --position) {
-                        if (position < 0 || position >= length)
-                            continue;
-                        var box = positionToRectangle(position);
-                        if (y < box.y || y >= box.y + box.height)
-                            continue;
-                        var next = positionToRectangle(position + 1);
-                        var width = next.y === box.y && next.x !== box.x
-                            ? next.x - box.x : writerFontMetrics.averageCharacterWidth;
-                        var left = Math.min(box.x, box.x + width);
-                        var right = Math.max(box.x, box.x + width);
-                        if (x >= left && x < right)
-                            return position;
-                    }
-                    return -1;
-                }
-
+                // positionAt() snaps to the nearest caret, even past the end of a
+                // line, so only count the character the pointer is inside.
                 function linkUrlUnder(x, y) {
-                    var position = characterUnder(x, y);
-                    return position < 0 ? "" : backend.linkUrlAt(position);
-                }
-
-                function refreshLinkHover() {
-                    if (!editorHoverArea.containsMouse) {
-                        clearLinkHover();
-                        return;
-                    }
-                    var point = editor.mapFromItem(contentRoot,
-                                                   linkHoverRootX, linkHoverRootY);
-                    linkHoverX = point.x;
-                    linkHoverY = point.y;
-                    hoveredLinkUrl = linkUrlUnder(point.x, point.y);
-                }
-
-                function clearLinkHover() {
-                    hoveredLinkUrl = "";
+                    var position = positionAt(x, y);
+                    if (position > 0 && x < positionToRectangle(position).x)
+                        --position;
+                    var box = positionToRectangle(position);
+                    if (y < box.y || y >= box.y + box.height
+                            || x < box.x || x >= box.x + writerFontMetrics.averageCharacterWidth)
+                        return "";
+                    return backend.linkUrlAt(position);
                 }
 
                 MouseArea {
-                    id: editorHoverArea
                     anchors.fill: parent
                     acceptedButtons: Qt.NoButton
                     hoverEnabled: true
                     cursorShape: Qt.IBeamCursor
-                    onEntered: editor.updateLinkHover(mouseX, mouseY)
-                    onPositionChanged: editor.updateLinkHover(mouse.x, mouse.y)
-                    onExited: editor.clearLinkHover()
+                    onPositionChanged: (mouse) => {
+                        editor.linkHoverX = mouse.x;
+                        editor.linkHoverY = mouse.y;
+                        editor.hoveredLinkUrl = editor.linkUrlUnder(mouse.x, mouse.y);
+                    }
+                    onExited: editor.hoveredLinkUrl = ""
+                }
+
+                ToolTip {
+                    visible: editor.hoveredLinkUrl.length > 0
+                    x: editor.linkHoverX + 12
+                    y: editor.linkHoverY + 20
+                    contentItem: Label {
+                        objectName: "linkTooltipText"
+                        // A destination is document text; AutoText would render
+                        // one that looks like HTML instead of showing it.
+                        textFormat: Text.PlainText
+                        text: editor.hoveredLinkUrl
+                        font.family: backend.editorFont
+                        font.pixelSize: win.scaledSize(12)
+                        elide: Text.ElideMiddle
+                    }
+                    width: Math.min(implicitWidth, win.width - 32)
                 }
 
                 Component.onCompleted: {
                     backend.attachDocument(textDocument);
                     forceActiveFocus();
                 }
-            }
-        }
-
-        // Keep the URL outside the clipped editor so it stays readable.
-        Rectangle {
-            id: linkTooltip
-            property point hoverPosition: editor.mapToItem(
-                contentRoot, editor.linkHoverX, editor.linkHoverY)
-
-            visible: editor.hoveredLinkUrl.length > 0
-            z: 20
-            x: Math.max(8, Math.min(contentRoot.width - width - 8,
-                                    hoverPosition.x + 12))
-            y: Math.max(8, Math.min(contentRoot.height - height - 8,
-                                    hoverPosition.y + 20))
-            width: Math.min(linkTooltipText.implicitWidth + 16,
-                            contentRoot.width - 16)
-            height: linkTooltipText.implicitHeight + 16
-            radius: 3
-            color: backend.themeBackground
-            border.color: backend.themeAccent
-
-            Text {
-                id: linkTooltipText
-                objectName: "linkTooltipText"
-                anchors.fill: parent
-                anchors.margins: 8
-                // A destination is arbitrary document text, and AutoText would
-                // render one that looks like HTML instead of showing it.
-                textFormat: Text.PlainText
-                text: editor.hoveredLinkUrl
-                color: backend.themeForeground
-                font.family: backend.editorFont
-                font.pixelSize: win.scaledSize(12)
-                elide: Text.ElideMiddle
-                verticalAlignment: Text.AlignVCenter
             }
         }
 

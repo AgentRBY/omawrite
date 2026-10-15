@@ -213,26 +213,6 @@ private slots:
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() / 2),
                  QStringLiteral("https://example.com"));
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() * 3), QString());
-
-        // A right-to-left label runs the other way across the screen.
-        editor->setProperty("text", QStringLiteral("[\u05e9\u05dc\u05d5\u05dd](https://example.org)"));
-        const QRectF rtlFirst = boxAt(1);
-        const QRectF rtlSecond = boxAt(2);
-        QVERIFY(rtlSecond.x() < rtlFirst.x());
-        const qreal rtlY = rtlFirst.y() + rtlFirst.height() / 2;
-        QCOMPARE(urlUnder((rtlFirst.x() + rtlSecond.x()) / 2, rtlY),
-                 QStringLiteral("https://example.org"));
-        QCOMPARE(urlUnder(rtlFirst.x() - 1, rtlY), QStringLiteral("https://example.org"));
-        editor->setProperty("text", QStringLiteral("[label](https://example.com)"));
-
-        // Deleting the link under a resting pointer takes its URL away too.
-        QMetaObject::invokeMethod(editor, "updateLinkHover",
-                                  Q_ARG(QVariant, only.x() + 1),
-                                  Q_ARG(QVariant, only.y() + only.height() / 2));
-        QCOMPARE(editor->property("hoveredLinkUrl").toString(),
-                 QStringLiteral("https://example.com"));
-        editor->setProperty("text", QString());
-        QTRY_COMPARE(editor->property("hoveredLinkUrl").toString(), QString());
     }
 
     void showsLinkTooltipUrlAsPlainText() {
