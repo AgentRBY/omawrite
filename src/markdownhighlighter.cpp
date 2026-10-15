@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QTextBlock>
 #include <QTextDocument>
 
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document)
@@ -43,9 +44,23 @@ void MarkdownHighlighter::refreshFont() {
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
     if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
         return;
+    const bool sameQuery = m_searchQuery == query;
+    const int previousMatchStart = m_currentMatchStart;
     m_searchQuery = query;
     m_currentMatchStart = currentMatchStart;
-    rehighlight();
+    if (!sameQuery) {
+        rehighlight();
+        return;
+    }
+
+    // Only the current match moved, so restyle just the blocks it left and
+    // entered rather than the whole document.
+    const QTextBlock left = document()->findBlock(previousMatchStart);
+    const QTextBlock entered = document()->findBlock(currentMatchStart);
+    if (left.isValid())
+        rehighlightBlock(left);
+    if (entered.isValid() && entered != left)
+        rehighlightBlock(entered);
 }
 
 void MarkdownHighlighter::rebuildFormats() {

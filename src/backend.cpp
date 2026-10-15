@@ -39,6 +39,12 @@
 #include "markdownhighlighter.h"
 
 constexpr qreal typoraLineHeightPercent = 140;
+
+static QTextBlockFormat lineHeightFormat() {
+    QTextBlockFormat format;
+    format.setLineHeight(typoraLineHeightPercent, QTextBlockFormat::ProportionalHeight);
+    return format;
+}
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
 const QString textZoomSetting = QStringLiteral("text/zoom");
 
@@ -509,12 +515,7 @@ bool Backend::editorTextChanged() {
         return false;
     m_lastDocumentText = text;
 
-    if (m_document) {
-        const int blockCount = m_document->blockCount();
-        if (blockCount > m_formattedBlockCount)
-            reapplyTypographyToChange();
-        m_formattedBlockCount = blockCount;
-    }
+    reapplyTypographyToChange();
 
     scheduleWordCount();
 
@@ -645,6 +646,42 @@ int Backend::cursorPositionStep(int position, int direction) const
 void Backend::setSearchHighlight(const QString &query, int currentMatchStart) {
     if (m_highlighter)
         m_highlighter->setSearch(query, currentMatchStart);
+}
+
+// Matched the way the highlighter matches, so the offsets agree with what it
+// paints even where lowercasing changes a string's length.
+QVariantList Backend::searchMatches(const QString &query) const {
+    QVariantList matches;
+    if (query.isEmpty())
+        return matches;
+    const QString text = currentDocumentText();
+    int from = 0;
+    while ((from = text.indexOf(query, from, Qt::CaseInsensitive)) >= 0) {
+        matches.append(from);
+        from += query.length();
+    }
+    return matches;
+}
+
+// One edit command, so a single undo takes the whole replacement back.
+void Backend::replaceRange(int start, int end, const QString &text) {
+    if (!m_document)
+        return;
+    const int last = m_document->characterCount() - 1;
+    QTextCursor cursor(m_document);
+    cursor.beginEditBlock();
+    cursor.setPosition(qBound(0, start, last));
+    cursor.setPosition(qBound(0, end, last), QTextCursor::KeepAnchor);
+    cursor.insertText(text);
+    cursor.endEditBlock();
+}
+
+bool Backend::insideFence(int position) const {
+    if (!m_document)
+        return false;
+    const QTextBlock block =
+        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
+    return block.isValid() && block.userState() >= MarkdownHighlighter::InsideFence;
 }
 
 void Backend::openExternalUrl(const QUrl &url) {
@@ -1160,9 +1197,6 @@ void Backend::applyDocumentTypography() {
     if (!m_document)
         return;
 
-    QTextBlockFormat blockFormat;
-    blockFormat.setLineHeight(typoraLineHeightPercent, QTextBlockFormat::ProportionalHeight);
-
     // A full pass is only used for freshly loaded/attached documents, so it is
     // safe to drop undo history here (re-enabling clears the stack anyway).
     const bool undoEnabled = m_document->isUndoRedoEnabled();
@@ -1171,20 +1205,15 @@ void Backend::applyDocumentTypography() {
     m_formattingTypography = true;
     QTextCursor cursor(m_document);
     cursor.select(QTextCursor::Document);
-    cursor.mergeBlockFormat(blockFormat);
+    cursor.mergeBlockFormat(lineHeightFormat());
     m_formattingTypography = false;
 
     m_document->setUndoRedoEnabled(undoEnabled);
-
-    m_formattedBlockCount = m_document->blockCount();
 }
 
 void Backend::reapplyTypographyToChange() {
     if (!m_document)
         return;
-
-    QTextBlockFormat blockFormat;
-    blockFormat.setLineHeight(typoraLineHeightPercent, QTextBlockFormat::ProportionalHeight);
 
     // Format only the block(s) touched by the last edit instead of the whole
     // document, and fold the change into the preceding edit command so a single
@@ -1193,12 +1222,28 @@ void Backend::reapplyTypographyToChange() {
     const int start = qBound(0, m_lastChangePos, maxPos);
     const int end = qBound(start, m_lastChangePos + m_lastChangeAdded, maxPos);
 
+    // Blocks that already have it are left alone: an undo brings their format
+    // back with the text, and merging anyway would push a command that clears
+    // the redo stack.
+    bool needed = false;
+    for (QTextBlock block = m_document->findBlock(start);
+         block.isValid() && block.position() <= end; block = block.next()) {
+        const QTextBlockFormat format = block.blockFormat();
+        if (format.lineHeightType() != QTextBlockFormat::ProportionalHeight
+                || format.lineHeight() != typoraLineHeightPercent) {
+            needed = true;
+            break;
+        }
+    }
+    if (!needed)
+        return;
+
     m_formattingTypography = true;
     QTextCursor cursor(m_document);
     cursor.joinPreviousEditBlock();
     cursor.setPosition(start);
     cursor.setPosition(end, QTextCursor::KeepAnchor);
-    cursor.mergeBlockFormat(blockFormat);
+    cursor.mergeBlockFormat(lineHeightFormat());
     cursor.endEditBlock();
     m_formattingTypography = false;
 }
