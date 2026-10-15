@@ -163,13 +163,19 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+B"
         context: Qt.WindowShortcut
-        onActivated: editor.wrapSelection("**", "**")
+        onActivated: editor.wrapSelection("**")
     }
 
     Shortcut {
         sequence: "Ctrl+I"
         context: Qt.WindowShortcut
-        onActivated: editor.wrapSelection("*", "*")
+        onActivated: editor.wrapSelection("*")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+X"
+        context: Qt.WindowShortcut
+        onActivated: editor.wrapSelection("~~")
     }
 
     Shortcut {
@@ -375,7 +381,7 @@ ApplicationWindow {
         // (Material Dialog.qml:14); as a child, the default content item sizes
         // to it without the feedback.
         Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+K  Link\nCtrl+Shift+C  Copy as HTML\nCtrl+P  Print\nCtrl+= / Ctrl+-  Text Size\nCtrl+0  Reset Text Size\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
+            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+Shift+X  Strikethrough\nCtrl+K  Link\nCtrl+Shift+C  Copy as HTML\nCtrl+P  Print\nCtrl+= / Ctrl+-  Text Size\nCtrl+0  Reset Text Size\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
             lineHeight: 1.5
         }
     }
@@ -649,15 +655,9 @@ ApplicationWindow {
                     EditorMutations.replaceRange(editor, start, end, replacement);
                 }
 
-                function wrapSelection(before, after) {
+                function wrapSelection(marker) {
                     forceActiveFocus();
-                    var start = Math.min(selectionStart, selectionEnd);
-                    var end = Math.max(selectionStart, selectionEnd);
-                    var selected = text.slice(start, end);
-                    EditorMutations.replaceRange(editor, start, end,
-                                                 before + selected + after,
-                                                 before.length,
-                                                 before.length + selected.length);
+                    EditorMutations.toggleWrap(editor, marker);
                 }
 
                 function insertLink() {

@@ -164,6 +164,68 @@ private slots:
         QSettings().remove(QStringLiteral("editor/font"));
     }
 
+    void findsStrikethroughOutsideCode() {
+        const auto markup = MarkdownHighlighter::inlineMarkup(QStringLiteral("a ~~gone~~ b"));
+        QCOMPARE(markup.size(), 1);
+        QCOMPARE(markup.at(0).kind, MarkdownHighlighter::InlineKind::Strikethrough);
+        QCOMPARE(markup.at(0).content.start, 4);
+        QCOMPARE(markup.at(0).content.length, 4);
+
+        // Tildes in code, beside space, or in longer runs stay literal.
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("`~~x~~`")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("a ~~ b ~~ c")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("~~~x~~~")).isEmpty());
+    }
+
+    void togglesEmphasisMarkers() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        // Sets the text, selects [from, to), toggles, and returns the text.
+        const auto toggle = [editor](const QString &text, int from, int to,
+                                     const QString &marker) {
+            editor->setProperty("text", text);
+            QMetaObject::invokeMethod(editor, "select", Q_ARG(int, from), Q_ARG(int, to));
+            QMetaObject::invokeMethod(editor, "wrapSelection", Q_ARG(QVariant, marker));
+            return editor->property("text").toString();
+        };
+        const QString bold = QStringLiteral("**");
+        const QString italic = QStringLiteral("*");
+
+        QCOMPARE(toggle(QStringLiteral("a word b"), 2, 6, bold), QStringLiteral("a **word** b"));
+        // Off again, whether the markers sit outside the selection or in it.
+        QCOMPARE(toggle(QStringLiteral("a **word** b"), 4, 8, bold), QStringLiteral("a word b"));
+        QCOMPARE(toggle(QStringLiteral("a **word** b"), 2, 10, bold), QStringLiteral("a word b"));
+        QCOMPARE(toggle(QStringLiteral("a ~~word~~ b"), 4, 8, QStringLiteral("~~")),
+                 QStringLiteral("a word b"));
+        // An empty pair goes away too.
+        QCOMPARE(toggle(QStringLiteral("Hello****."), 7, 7, bold), QStringLiteral("Hello."));
+
+        // The "*" of bold is not italic, and "***" holds both.
+        QCOMPARE(toggle(QStringLiteral("**word**"), 2, 6, italic), QStringLiteral("***word***"));
+        QCOMPARE(toggle(QStringLiteral("***word***"), 3, 7, italic), QStringLiteral("**word**"));
+        QCOMPARE(toggle(QStringLiteral("***word***"), 3, 7, bold), QStringLiteral("*word*"));
+        // Selecting part of bold's markers adds italic rather than removing bold.
+        QCOMPARE(toggle(QStringLiteral("**word**"), 1, 7, italic), QStringLiteral("***word***"));
+
+        // Separate spans are wrapped, not broken apart.
+        QCOMPARE(toggle(QStringLiteral("**a** and **b**"), 0, 15, bold),
+                 QStringLiteral("****a** and **b****"));
+        // Other emphasis nested inside does not stop italic from coming off.
+        QCOMPARE(toggle(QStringLiteral("*a **b** c*"), 1, 10, italic),
+                 QStringLiteral("a **b** c"));
+    }
+
     void findsInlineMarkdownRanges() {
         const auto markup = MarkdownHighlighter::inlineMarkup(
             QStringLiteral("**bold** and *italic* and [site](https://example.com)"));

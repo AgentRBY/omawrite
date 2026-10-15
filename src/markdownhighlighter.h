@@ -21,7 +21,7 @@ public:
         int length;
     };
 
-    enum class InlineKind { Bold, Italic, Link };
+    enum class InlineKind { Bold, Italic, Strikethrough, Link };
 
     // Carried from block to block so a fenced run of code knows it is inside
     // one. Stored on the block, which is where Backend::hiddenRangesAt reads it.

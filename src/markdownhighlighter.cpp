@@ -139,7 +139,8 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
     if (!text.isEmpty()) {
         highlightMarkers(text);
         if (text.contains(QLatin1Char('`')) || text.contains(QLatin1Char('*'))
-            || text.contains(QLatin1Char('_')) || text.contains(QLatin1Char('['))) {
+            || text.contains(QLatin1Char('_')) || text.contains(QLatin1Char('['))
+            || text.contains(QLatin1Char('~'))) {
             highlightInline(text);
         }
     }
@@ -227,6 +228,8 @@ void MarkdownHighlighter::highlightMarkers(const QString &text) {
 void MarkdownHighlighter::highlightInline(const QString &text) {
     const QList<InlineMarkup> markup = inlineMarkup(text);
     for (const InlineMarkup &item : markup) {
+        if (item.kind == InlineKind::Strikethrough)
+            continue;
         const QTextCharFormat &contentFormat =
             item.kind == InlineKind::Bold ? m_boldFormat
             : item.kind == InlineKind::Italic ? m_italicFormat
@@ -240,6 +243,19 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
     // when emphasis or a link surrounds it.
     for (const Span &code : codeSpans(text))
         setFormat(code.start, code.length, m_codeFormat);
+
+    // Strikethrough draws over whatever it encloses instead of replacing it.
+    for (const InlineMarkup &item : markup) {
+        if (item.kind != InlineKind::Strikethrough)
+            continue;
+        for (int i = item.content.start; i < item.content.start + item.content.length; ++i) {
+            QTextCharFormat struck = format(i);
+            struck.setFontStrikeOut(true);
+            setFormat(i, 1, struck);
+        }
+        for (const Span &marker : item.markers)
+            setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
+    }
 }
 
 QList<MarkdownHighlighter::Span> MarkdownHighlighter::codeSpans(const QString &text) {
@@ -275,7 +291,7 @@ QList<MarkdownHighlighter::Span> MarkdownHighlighter::codeSpans(const QString &t
 QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const QString &text) {
     QList<InlineMarkup> markup;
     if (!text.contains(QLatin1Char('*')) && !text.contains(QLatin1Char('_'))
-            && !text.contains(QLatin1Char('['))) {
+            && !text.contains(QLatin1Char('[')) && !text.contains(QLatin1Char('~'))) {
         return markup;
     }
 
@@ -326,6 +342,17 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
         const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
         append({InlineKind::Italic, span(match, contentIndex),
                 {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
+    }
+
+    // Exactly two tildes, opening before text and closing after it.
+    static const QRegularExpression strikeRe(
+        QStringLiteral("(?<!~)~~(?![\\s~])(.*?[^\\s~])~~(?!~)"));
+    QRegularExpressionMatchIterator strikeMatches = strikeRe.globalMatch(text);
+    while (strikeMatches.hasNext()) {
+        const QRegularExpressionMatch match = strikeMatches.next();
+        const Span whole = span(match, 0);
+        append({InlineKind::Strikethrough, span(match, 1),
+                {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
     }
 
     static const QRegularExpression linkRe(
