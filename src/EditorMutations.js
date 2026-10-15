@@ -50,7 +50,9 @@ function toggleWrap(editor, before, after) {
         return false;
     };
 
-    // Selection includes the markers: strip them.
+    // The run on each side counts the markers inside the selection and those
+    // just outside it, so the toggle undoes itself whether or not the markers
+    // were selected: Ctrl+B twice on "*word*" leaves "*word*".
     var leading = 0;
     while (leading < selected.length && selected.charAt(leading) === mark)
         ++leading;
@@ -58,19 +60,16 @@ function toggleWrap(editor, before, after) {
     while (trailing < selected.length - leading
            && selected.charAt(selected.length - 1 - trailing) === mark)
         ++trailing;
-    if (leading >= size && leading === trailing && selected.length > leading + trailing
-            && leading + runBefore(start) === trailing + runAfter(end)
-            && holds(leading + runBefore(start))
-            && !spansRuns(selected.slice(leading, selected.length - trailing))) {
-        var inner = selected.slice(size, selected.length - size);
-        replaceRange(editor, start, end, inner, 0, inner.length);
-        return;
-    }
-
-    // Selection (or caret) sits directly inside the markers: strip them.
-    var outside = runBefore(start);
-    if (outside === runAfter(end) && holds(outside) && leading === 0 && !spansRuns(selected)) {
-        replaceRange(editor, start - size, end + size, selected, 0, selected.length);
+    var outsideBefore = runBefore(start);
+    var outsideAfter = runAfter(end);
+    var left = outsideBefore + leading;
+    var right = outsideAfter + trailing;
+    var content = selected.slice(leading, selected.length - trailing);
+    if (left === right && holds(left) && !spansRuns(content)) {
+        var keep = Array(left - size + 1).join(mark);
+        var rangeStart = start - outsideBefore;
+        replaceRange(editor, rangeStart, end + outsideAfter, keep + content + keep,
+                     keep.length, keep.length + content.length);
         return;
     }
 

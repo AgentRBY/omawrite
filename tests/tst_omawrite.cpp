@@ -494,6 +494,7 @@ private slots:
                 property string italicOffInsideBold
                 property string boldOffInsideItalic
                 property string italicAroundNestedBold
+                property string boldAroundItalic
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -549,6 +550,12 @@ private slots:
                     selectAll();
                     EditorMutations.toggleWrap(this, "*", "*");
                     italicAroundNestedBold = text;
+
+                    text = "*word*";
+                    selectAll();
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    boldAroundItalic = text;
                 }
             }
         )QML";
@@ -581,6 +588,7 @@ private slots:
                  QStringLiteral("*bold*"));
         QCOMPARE(editor->property("italicAroundNestedBold").toString(),
                  QStringLiteral("a **b** c"));
+        QCOMPARE(editor->property("boldAroundItalic").toString(), QStringLiteral("*word*"));
     }
 
     void keepsCursorAndSelectionStableAcrossInsertions() {
