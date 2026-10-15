@@ -2846,6 +2846,14 @@ private slots:
         QVERIFY(!reload->property("visible").toBool());
         dialog->setProperty("deleted", false);
         QVERIFY(reload->property("visible").toBool());
+
+        // Removed while Reload has the focus: Enter keeps the text instead.
+        QVERIFY(QMetaObject::invokeMethod(reload, "forceActiveFocus"));
+        QTRY_VERIFY(reload->property("activeFocus").toBool());
+        dialog->setProperty("deleted", true);
+        QObject *keep = dialog->findChild<QObject *>(QStringLiteral("keepButton"));
+        QVERIFY(keep);
+        QTRY_VERIFY(keep->property("activeFocus").toBool());
     }
 
 private:
