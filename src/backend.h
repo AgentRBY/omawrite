@@ -149,6 +149,8 @@ private:
     QString m_status;
     int m_wordCount = 0;
     bool m_darkMode = true;
+    // The desktop's light/dark setting, used when the Omarchy theme names none.
+    bool m_systemDarkMode = true;
     qreal m_desktopTextScale = 1.0;
     qreal m_textZoom = 1.0;
     bool m_loading = false;
@@ -181,4 +183,5 @@ private:
     QString m_themeSelectionForeground;
     QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
+    QTimer m_themeReloadTimer;
 };
