@@ -291,6 +291,10 @@ void Backend::fileDialogCanceled() {
 
 void Backend::discardRecovery() {
     clearRecovery();
+    // Discarded changes must never reach the file, even if the open or close
+    // that follows fails and leaves them in the editor. Opening a file or an
+    // explicit save lifts this.
+    suspendAutoSave();
 }
 
 void Backend::reloadFromDisk() {

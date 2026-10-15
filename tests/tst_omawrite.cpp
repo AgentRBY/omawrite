@@ -1200,6 +1200,30 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("undecided"));
     }
 
+    void keepsDiscardedChangesOutOfTheFile() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("draft.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("original"));
+        QVERIFY(backend.editorTextChanged());
+        backend.saveAs(QUrl::fromLocalFile(path));
+
+        // The writer edits, then picks Discard to open a file that fails.
+        backend.holdAutoSave(true);
+        editor->setProperty("text", QStringLiteral("changes to throw away"));
+        QVERIFY(backend.editorTextChanged());
+        backend.discardRecovery();
+        backend.open(QUrl::fromLocalFile(directory.filePath(QStringLiteral("missing.md"))));
+        backend.holdAutoSave(false);
+
+        QTest::qWait(800);
+        QCOMPARE(readFile(path), QByteArray("original"));
+    }
+
     void doesNotAutoSaveARecoveredDraftOverItsFile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
