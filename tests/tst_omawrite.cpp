@@ -215,6 +215,8 @@ private slots:
         QCOMPARE(toggle(QStringLiteral("**word**"), 2, 6, italic), QStringLiteral("***word***"));
         QCOMPARE(toggle(QStringLiteral("***word***"), 3, 7, italic), QStringLiteral("**word**"));
         QCOMPARE(toggle(QStringLiteral("***word***"), 3, 7, bold), QStringLiteral("*word*"));
+        // Selecting part of bold's markers adds italic rather than removing bold.
+        QCOMPARE(toggle(QStringLiteral("**word**"), 1, 7, italic), QStringLiteral("***word***"));
 
         // Separate spans are wrapped, not broken apart.
         QCOMPARE(toggle(QStringLiteral("**a** and **b**"), 0, 15, bold),

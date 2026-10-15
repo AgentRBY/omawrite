@@ -65,7 +65,8 @@ function toggleWrap(editor, marker) {
             && !hasMarker(selected)) {
         replaceRange(editor, start - size, end + size, selected, 0, selected.length);
     } else if (selected.length >= 2 * size && holds(runFrom(start, 1, end))
-               && holds(runFrom(end - 1, -1, start - 1)) && !hasMarker(inner)) {
+               && holds(runFrom(end - 1, -1, start - 1)) && !hasMarker(inner)
+               && text.charAt(start - 1) !== mark && text.charAt(end) !== mark) {
         replaceRange(editor, start, end, inner, 0, inner.length);
     } else {
         replaceRange(editor, start, end, marker + selected + marker,
