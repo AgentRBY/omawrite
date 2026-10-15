@@ -581,10 +581,14 @@ QString Backend::linkUrlAt(int position) const {
     if (!m_document)
         return {};
 
-    const int maxPosition = m_document->characterCount() - 1;
     const QTextBlock block =
-        m_document->findBlock(qBound(0, position, maxPosition));
+        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
     if (!block.isValid())
+        return {};
+
+    // Fenced code is literal, so nothing in it is a link.
+    if (block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
         return {};
 
     return MarkdownHighlighter::linkUrlAt(block.text(), position - block.position());

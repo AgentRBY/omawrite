@@ -940,8 +940,10 @@ ApplicationWindow {
                     if (position > 0 && x < positionToRectangle(position).x)
                         --position;
                     var box = positionToRectangle(position);
-                    if (y < box.y || y >= box.y + box.height
-                            || x < box.x || x >= box.x + writerFontMetrics.averageCharacterWidth)
+                    var next = positionToRectangle(position + 1);
+                    var right = next.y === box.y && next.x > box.x
+                        ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
+                    if (y < box.y || y >= box.y + box.height || x < box.x || x >= right)
                         return "";
                     return backend.linkUrlAt(position);
                 }

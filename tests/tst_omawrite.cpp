@@ -239,6 +239,18 @@ private slots:
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() / 2),
                  QStringLiteral("https://example.com"));
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() * 3), QString());
+
+        // A wide character counts across its whole width.
+        editor->setProperty("text", QStringLiteral("[\u5bbd](https://example.com)"));
+        const QRectF wide = boxAt(1);
+        const qreal wideRight = boxAt(2).x();
+        QVERIFY(wideRight - wide.x() > editor->property("font").value<QFont>().pixelSize() * 0.7);
+        QCOMPARE(urlUnder(wideRight - 1, wide.y() + wide.height() / 2),
+                 QStringLiteral("https://example.com"));
+
+        // Link-like text inside fenced code is not a link.
+        editor->setProperty("text", QStringLiteral("```\n[label](https://example.com)\n```"));
+        QCOMPARE(backend.linkUrlAt(5), QString());
     }
 
     void showsLinkTooltipUrlAsPlainText() {
