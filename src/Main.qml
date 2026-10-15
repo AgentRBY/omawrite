@@ -934,18 +934,22 @@ ApplicationWindow {
                 property real linkHoverY: 0
 
                 // positionAt() snaps to the nearest caret, even past the end of a
-                // line, so only count the character the pointer is inside.
+                // line, so only count a character the pointer is inside: the one
+                // on either side of that caret, whichever way the text runs.
                 function linkUrlUnder(x, y) {
-                    var position = positionAt(x, y);
-                    if (position > 0 && x < positionToRectangle(position).x)
-                        --position;
-                    var box = positionToRectangle(position);
-                    var next = positionToRectangle(position + 1);
-                    var right = next.y === box.y && next.x > box.x
-                        ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
-                    if (y < box.y || y >= box.y + box.height || x < box.x || x >= right)
-                        return "";
-                    return backend.linkUrlAt(position);
+                    var caret = positionAt(x, y);
+                    for (var position = Math.max(0, caret - 1); position <= caret; ++position) {
+                        var box = positionToRectangle(position);
+                        var next = positionToRectangle(position + 1);
+                        // A hidden marker has no width; only a line's last
+                        // character needs an estimate.
+                        var edge = next.y === box.y
+                            ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
+                        if (y >= box.y && y < box.y + box.height
+                                && x >= Math.min(box.x, edge) && x < Math.max(box.x, edge))
+                            return backend.linkUrlAt(position);
+                    }
+                    return "";
                 }
 
                 MouseArea {

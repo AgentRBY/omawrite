@@ -248,6 +248,16 @@ private slots:
         QCOMPARE(urlUnder(wideRight - 1, wide.y() + wide.height() / 2),
                  QStringLiteral("https://example.com"));
 
+        // A right-to-left label runs the other way across the screen.
+        editor->setProperty("text", QStringLiteral("[\u05e9\u05dc\u05d5\u05dd](https://example.org)"));
+        const QRectF rtlFirst = boxAt(1);
+        const QRectF rtlSecond = boxAt(2);
+        QVERIFY(rtlSecond.x() < rtlFirst.x());
+        const qreal rtlY = rtlFirst.y() + rtlFirst.height() / 2;
+        QCOMPARE(urlUnder((rtlFirst.x() + rtlSecond.x()) / 2, rtlY),
+                 QStringLiteral("https://example.org"));
+        QCOMPARE(urlUnder(rtlFirst.x() - 1, rtlY), QStringLiteral("https://example.org"));
+
         // Link-like text inside fenced code is not a link.
         editor->setProperty("text", QStringLiteral("```\n[label](https://example.com)\n```"));
         QCOMPARE(backend.linkUrlAt(5), QString());
