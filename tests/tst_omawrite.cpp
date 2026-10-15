@@ -486,6 +486,12 @@ private slots:
         QTest::keyClick(window, Qt::Key_Return);
         QCOMPARE(editor->property("text").toString(),
                  QStringLiteral("para\n\n\n```\ncode\n```"));
+
+        // Tilde fences hold code the same way.
+        editor->setProperty("text", QStringLiteral("~~~\ncode"));
+        editor->setProperty("cursorPosition", 8);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("~~~\ncode\n"));
     }
 
     void togglesEmphasisMarkers() {
@@ -756,7 +762,7 @@ private slots:
         QTextDocument document;
         document.setPlainText(text);
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto formatAt = [&document](int position) {
@@ -796,7 +802,7 @@ private slots:
                                             "```\n"
                                             "after _italic_\n"));
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto stateOf = [&document](int blockNumber) {
@@ -837,7 +843,7 @@ private slots:
                                             "````\n"
                                             "after _italic_\n"));
         MarkdownHighlighter highlighter(&document);
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         highlighter.rehighlight();
 
         const auto stateOf = [&document](int blockNumber) {
@@ -957,6 +963,114 @@ private slots:
                 != QColor(QStringLiteral("#0c0b0c")));
     }
 
+    void rendersBoldItalicRuns() {
+        const QString text = QStringLiteral("a ***word*** b");
+        const auto markup = MarkdownHighlighter::inlineMarkup(text);
+        QCOMPARE(markup.size(), 2);
+        QCOMPARE(markup.at(0).kind, MarkdownHighlighter::InlineKind::Bold);
+        QCOMPARE(markup.at(1).kind, MarkdownHighlighter::InlineKind::Italic);
+        QCOMPARE(markup.at(1).content.start, 5);
+        QCOMPARE(markup.at(1).content.length, 4);
+
+        const auto formats = highlightedFormats(text);
+        QVERIFY(formats.at(5).fontItalic());
+        QCOMPARE(formats.at(5).fontWeight(), int(QFont::Bold));
+        for (int i : {2, 3, 4, 9, 10, 11})
+            QCOMPARE(formats.at(i).fontPointSize(), 1.0);
+    }
+
+    // Markers nested inside other markup stay hidden, as the caret skips them.
+    void hidesMarkersInsideNestedMarkup() {
+        const QString linked = QStringLiteral("[**a**](u)");
+        const auto linkFormats = highlightedFormats(linked);
+        for (int i : {0, 1, 2, 4, 5, 6})
+            QCOMPARE(linkFormats.at(i).fontPointSize(), 1.0);
+        QCOMPARE(linkFormats.at(3).fontWeight(), int(QFont::Bold));
+        QVERIFY(linkFormats.at(3).fontUnderline());
+
+        const QString nested = QStringLiteral("*a __b__ c*");
+        const auto nestedFormats = highlightedFormats(nested);
+        for (int i : {0, 3, 4, 6, 7, 10})
+            QCOMPARE(nestedFormats.at(i).fontPointSize(), 1.0);
+        QVERIFY(nestedFormats.at(5).fontItalic());
+        QCOMPARE(nestedFormats.at(5).fontWeight(), int(QFont::Bold));
+    }
+
+    void honoursBackslashEscapes() {
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\*not\\* here")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\[x](y)")).isEmpty());
+        QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\~~not~~")).isEmpty());
+        // An escaped backslash leaves the marker alone.
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\\\*yes*")).size(), 1);
+    }
+
+    void leavesThematicBreaksAlone() {
+        for (const QString &rule : {QStringLiteral("*****"), QStringLiteral("___"),
+                                    QStringLiteral("* * *")}) {
+            QVERIFY2(MarkdownHighlighter::inlineMarkup(rule).isEmpty(), qPrintable(rule));
+            const auto formats = highlightedFormats(rule);
+            for (const QTextCharFormat &format : formats) {
+                QVERIFY(format.fontWeight() != QFont::Bold);
+                QVERIFY(format.fontPointSize() != 1.0);
+            }
+        }
+    }
+
+    void mergesInlineStylesWithTheBlock() {
+        // A heading stays bold under italic, a link, or code.
+        const auto heading = highlightedFormats(QStringLiteral("# head *it* [l](u) `c`"));
+        QVERIFY(heading.at(8).fontItalic());
+        QCOMPARE(heading.at(8).fontWeight(), int(QFont::Bold));
+        QCOMPARE(heading.at(13).fontWeight(), int(QFont::Bold));
+        QCOMPARE(heading.at(20).fontWeight(), int(QFont::Bold));
+
+        // A quote keeps its colour under bold.
+        const auto quote = highlightedFormats(QStringLiteral("> quote **b**"));
+        QCOMPARE(quote.at(10).fontWeight(), int(QFont::Bold));
+        QCOMPARE(quote.at(10).foreground().color(), quote.at(3).foreground().color());
+    }
+
+    void recognisesTildeFences() {
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("~~~js\n"
+                                            "*code*\n"
+                                            "```\n"
+                                            "~~~\n"
+                                            "after *it*\n"));
+        MarkdownHighlighter highlighter(&document);
+        highlighter.rehighlight();
+        const auto stateOf = [&document](int blockNumber) {
+            return document.findBlockByNumber(blockNumber).userState();
+        };
+        QVERIFY(stateOf(0) >= int(MarkdownHighlighter::InsideFence));
+        QVERIFY(stateOf(1) >= int(MarkdownHighlighter::InsideFence));
+        // Backticks do not close a tilde fence.
+        QVERIFY(stateOf(2) >= int(MarkdownHighlighter::InsideFence));
+        QCOMPARE(stateOf(3), int(MarkdownHighlighter::Prose));
+        QCOMPARE(stateOf(4), int(MarkdownHighlighter::Prose));
+    }
+
+    void readsLinkDestinationsWithParentheses() {
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(QStringLiteral("[a](b(c))"), 1),
+                 QStringLiteral("b(c)"));
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(QStringLiteral("[a](b) and (c)"), 1),
+                 QStringLiteral("b"));
+    }
+
+    void reportsThemeChangesOnlyWhenTheyHappen() {
+        ScopedTheme theme("mode = \"dark\"\nbackground = \"#111111\"\n");
+        QVERIFY(theme.ok);
+        Backend backend;
+        QSignalSpy colorsSpy(&backend, &Backend::themeColorsChanged);
+        QSignalSpy modeSpy(&backend, &Backend::darkModeChanged);
+
+        // The theme names its mode, so the desktop's setting changes nothing.
+        backend.setDarkMode(false);
+        QVERIFY(backend.darkMode());
+        QCOMPARE(colorsSpy.count(), 0);
+        QCOMPARE(modeSpy.count(), 0);
+    }
+
     void ignoresInlineMarkdownInsideCodeSpans() {
         QCOMPARE(MarkdownHighlighter::inlineMarkup(
                      QStringLiteral("`The_brown_fox` jumps")).size(), 0);
@@ -1011,7 +1125,7 @@ private slots:
         MarkdownHighlighter highlighter(&document);
         document.setPlainText(QStringLiteral("_a `b` c_"));
         // The code panel comes from the theme, as Backend passes it in.
-        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
         // The constructor's own rehighlight is queued, so ask for one directly.
         highlighter.rehighlight();
 
@@ -2144,22 +2258,37 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("theirs, edited"));
     }
 
-    void autoSavesFilesWithWindowsLineEndings() {
+    // Saving writes UTF-8 with plain line endings, so a file holding anything
+    // else is only rewritten by an explicit save, never by typing.
+    void keepsOtherEncodingsAndLineEndingsOutOfAutoSave() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        const QString path = directory.filePath(QStringLiteral("crlf.md"));
-        writeFile(path, "one\r\ntwo\r\n");
+        const QList<QByteArray> originals{QByteArray("one\r\ntwo\r\n"),
+                                          QByteArray("caf\xe9\n")};
+        for (const QByteArray &original : originals) {
+            const QString path = directory.filePath(QStringLiteral("kept.md"));
+            writeFile(path, original);
 
-        Backend backend;
-        QScopedPointer<QObject> editor(makeEditor(backend));
-        QVERIFY(editor);
-        backend.open(QUrl::fromLocalFile(path));
-        QSignalSpy externalChangeSpy(&backend, &Backend::externalChangeDetected);
+            Backend backend;
+            QScopedPointer<QObject> editor(makeEditor(backend));
+            QVERIFY(editor);
+            backend.open(QUrl::fromLocalFile(path));
+            QVERIFY(backend.status().contains(QStringLiteral("Auto-save is off")));
 
-        editor->setProperty("text", QStringLiteral("one\ntwo\nthree\n"));
-        QVERIFY(backend.editorTextChanged());
-        QTRY_VERIFY(!backend.modified());
-        QCOMPARE(externalChangeSpy.count(), 0);
+            editor->setProperty("text", QStringLiteral("changed\n"));
+            QVERIFY(backend.editorTextChanged());
+            QVERIFY(!backend.m_autoSaveTimer.isActive());
+            QTest::qWait(700);
+            QCOMPARE(readFile(path), original);
+
+            // Keeping our version over an outside edit does not lift it either.
+            backend.keepExternalVersion();
+            QVERIFY(!backend.m_autoSaveTimer.isActive());
+
+            // An explicit save still writes.
+            backend.save();
+            QCOMPARE(readFile(path), QByteArray("changed\n"));
+        }
     }
 
     void holdsAutoSaveWhileTheWriterDecides() {
@@ -2234,6 +2363,143 @@ private slots:
         backend.openOrStartFile(QUrl::fromLocalFile(path));
         QCOMPARE(backend.status(), QStringLiteral("Could not open new.md."));
         QVERIFY(backend.fileName() != QStringLiteral("new.md"));
+    }
+
+    void namesARelativeFileByItsFullPath() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString previous = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(directory.path()));
+
+        Backend backend;
+        backend.openOrStartFile(QUrl::fromLocalFile(QStringLiteral("relative.md")));
+        QDir::setCurrent(previous);
+
+        // A recovery draft written later must not depend on the directory.
+        QCOMPARE(backend.fileUrl().toLocalFile(),
+                 QDir(directory.path()).absoluteFilePath(QStringLiteral("relative.md")));
+    }
+
+    void saysWhenARecoveredDraftKeepsAFileFromOpening() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("asked.md"));
+        writeFile(path, "on disk");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        // As after restoring a draft: the window holds unsaved text.
+        editor->setProperty("text", QStringLiteral("recovered"));
+        QVERIFY(backend.editorTextChanged());
+
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.status(),
+                 QStringLiteral("Recovered unsaved changes; asked.md was not opened."));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("recovered"));
+        backend.discardRecovery();
+    }
+
+    void dropsAPendingCloseWhenItsSaveFails() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        // The writer chose Save in the close prompt, and the save failed.
+        window->setProperty("pendingAction", QStringLiteral("close"));
+        window->setProperty("awaitingPendingSave", true);
+        QSignalSpy failedSpy(&backend, &Backend::saveFailed);
+        backend.saveAs(QUrl::fromLocalFile(QStringLiteral("/nonexistent-dir/x.md")));
+        QCOMPARE(failedSpy.count(), 1);
+
+        // A later save, such as an auto-save, must not close the window.
+        QCOMPARE(window->property("pendingAction").toString(), QString());
+        QVERIFY(!window->property("awaitingPendingSave").toBool());
+    }
+
+    void savesInAFolderItCannotWriteNewFilesIn() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("shared.md"));
+        writeFile(path, "before");
+        QFile::setPermissions(directory.path(), QFile::ReadOwner | QFile::ExeOwner);
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.open(QUrl::fromLocalFile(path));
+        editor->setProperty("text", QStringLiteral("after"));
+        QVERIFY(backend.editorTextChanged());
+        backend.save();
+        QFile::setPermissions(directory.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+
+        QVERIFY(!backend.modified());
+        QCOMPARE(readFile(path), QByteArray("after"));
+    }
+
+    void removesARecoveryDraftItCannotRead() {
+        Backend backend;
+        const QString draft = backend.m_recoveryPath;
+        QVERIFY(!draft.isEmpty());
+        writeFile(draft, "not json");
+
+        // Attaching the document is when a draft is restored.
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        QVERIFY(!QFileInfo::exists(draft));
+        QVERIFY(!backend.modified());
+    }
+
+    void keepsWatchingAFileReplacedFromOutside() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("watched.md"));
+        writeFile(path, "first");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.open(QUrl::fromLocalFile(path));
+        QSignalSpy externalSpy(&backend, &Backend::externalChangeDetected);
+
+        // Editors and sync tools often replace a file rather than write into it.
+        const QString replacement = directory.filePath(QStringLiteral("replacement"));
+        writeFile(replacement, "second");
+        QVERIFY(QFile::remove(path));
+        QVERIFY(QFile::rename(replacement, path));
+        QTRY_VERIFY(externalSpy.count() >= 1);
+        QTRY_VERIFY(backend.m_fileWatcher.files().contains(path));
+    }
+
+    void keepsTheWritersTextWhenTheChangeDialogIsDismissed() {
+        QQmlEngine engine;
+        QQmlComponent component(&engine);
+        component.setData("import QtQuick\nimport QtQuick.Controls\nApplicationWindow {"
+                          " property alias dialog: dialog\n"
+                          " ExternalChangeDialog { id: dialog } }",
+                          QUrl::fromLocalFile(QFINDTESTDATA("../src/Main.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY(window);
+        QObject *dialog = window->property("dialog").value<QObject *>();
+        QVERIFY(dialog);
+        QSignalSpy keepSpy(dialog, SIGNAL(keepRequested()));
+        QSignalSpy reloadSpy(dialog, SIGNAL(reloadRequested()));
+
+        // Escape closes it without a choice.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(QMetaObject::invokeMethod(dialog, "close"));
+        QTRY_COMPARE(keepSpy.count(), 1);
+        QCOMPARE(reloadSpy.count(), 0);
     }
 
     void opensAnExistingFileFromTheCommandLine() {
@@ -2426,6 +2692,21 @@ private slots:
     }
 
 private:
+    // The character formats the highlighter gives a single line of text.
+    static QList<QTextCharFormat> highlightedFormats(const QString &text) {
+        QTextDocument document;
+        document.setPlainText(text);
+        MarkdownHighlighter highlighter(&document);
+        highlighter.setTheme(true, "#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.rehighlight();
+        QList<QTextCharFormat> formats(text.length());
+        for (const auto &range : document.firstBlock().layout()->formats()) {
+            for (int i = range.start; i < range.start + range.length; ++i)
+                formats[i] = range.format;
+        }
+        return formats;
+    }
+
     // Points HOME at a scratch tree holding one colors.toml, and puts it back on the way out.
     struct ScopedTheme {
         explicit ScopedTheme(const QByteArray &palette) {

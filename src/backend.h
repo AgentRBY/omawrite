@@ -73,10 +73,8 @@ public:
     Q_INVOKABLE void open(const QUrl &url);
     void openOrStartFile(const QUrl &url);
     Q_INVOKABLE void save();
-    Q_INVOKABLE void saveForClose();
     Q_INVOKABLE void saveAsDialog();
     Q_INVOKABLE void saveAs(const QUrl &url);
-    Q_INVOKABLE void fileDialogCanceled();
     Q_INVOKABLE void discardRecovery();
     Q_INVOKABLE void reloadFromDisk();
     Q_INVOKABLE void keepExternalVersion();
@@ -97,7 +95,6 @@ public:
     Q_INVOKABLE QVariantList searchMatches(const QString &query) const;
     Q_INVOKABLE void replaceRange(int start, int end, const QString &text);
     Q_INVOKABLE bool insideFence(int position) const;
-    Q_INVOKABLE void openExternalUrl(const QUrl &url);
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
     Q_INVOKABLE void documentFontChanged();
@@ -111,7 +108,7 @@ signals:
     void textScaleChanged();
     void themeColorsChanged();
     void editorFontChanged();
-    void closeAfterSave();
+    void saveFailed();
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
     void saveSucceeded();
@@ -141,8 +138,11 @@ private:
     void suspendAutoSave();
     void restoreRecovery();
     void clearRecovery();
-    QString recoveryPath() const;
+    bool diskMatchesKnownContents() const;
+    void reportExternalChange(bool deleted);
+    static bool savesUnchanged(const QByteArray &raw);
     void setKnownFileContents(const QByteArray &contents, bool known);
+    void unwatchFiles();
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
@@ -152,10 +152,11 @@ private:
     QString m_status;
     int m_wordCount = 0;
     bool m_darkMode = true;
+    // The desktop's light/dark setting, used when the Omarchy theme names none.
+    bool m_systemDarkMode = true;
     qreal m_desktopTextScale = 1.0;
     qreal m_textZoom = 1.0;
     bool m_loading = false;
-    bool m_closeAfterSave = false;
     bool m_formattingTypography = false;
     int m_lastChangePos = 0;
     int m_lastChangeAdded = 0;
@@ -183,4 +184,5 @@ private:
     QString m_themeSelectionForeground;
     QString m_editorFont;
     QFileSystemWatcher m_themeWatcher;
+    QTimer m_themeReloadTimer;
 };

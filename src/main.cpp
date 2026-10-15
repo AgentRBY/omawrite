@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
     backend.setParentWindow(qobject_cast<QWindow *>(engine.rootObjects().constFirst()));
 
     const QStringList args = app.arguments();
-    if (args.size() > 1 && !backend.modified())
+    if (args.size() > 1)
         backend.openOrStartFile(QUrl::fromLocalFile(args.at(1)));
 
     return app.exec();
