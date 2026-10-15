@@ -542,6 +542,13 @@ private slots:
         QCOMPARE(text(), QStringLiteral("a hello b"));
         QCOMPARE(editor->property("cursorPosition").toInt(), 4);
 
+        // At the end of bold italic text, Ctrl+B steps out rather than unbolding.
+        editor->setProperty("text", QStringLiteral("***hello***"));
+        editor->setProperty("cursorPosition", 8);
+        bold();
+        QCOMPARE(text(), QStringLiteral("***hello***"));
+        QCOMPARE(editor->property("cursorPosition").toInt(), 11);
+
         // Italic works the same way.
         editor->setProperty("text", QStringLiteral("a "));
         editor->setProperty("cursorPosition", 2);
