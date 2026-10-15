@@ -8,6 +8,7 @@
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QQuickStyle>
+#include <QQuickItem>
 #include <QQuickTextDocument>
 #include <QStandardPaths>
 #include <QClipboard>
@@ -177,6 +178,322 @@ private slots:
         QVERIFY(MarkdownHighlighter::inlineMarkup(QStringLiteral("~~~x~~~")).isEmpty());
     }
 
+    void undoesAnEditInOneStep() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        editor->setProperty("text", QStringLiteral("hello world"));
+        QMetaObject::invokeMethod(editor, "select", Q_ARG(int, 0), Q_ARG(int, 5));
+        QMetaObject::invokeMethod(editor, "wrapSelection", Q_ARG(QVariant, QStringLiteral("**")));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("**hello** world"));
+        QMetaObject::invokeMethod(editor, "undo");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("hello world"));
+    }
+
+    void keepsLineHeightAcrossUndoAndPaste() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        auto *quickDocument = qobject_cast<QQuickTextDocument *>(
+            editor->property("textDocument").value<QObject *>());
+        QVERIFY(quickDocument);
+        QTextDocument *document = quickDocument->textDocument();
+        const auto allLinesSpaced = [document] {
+            for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+                if (block.blockFormat().lineHeight() != 140)
+                    return false;
+            }
+            return true;
+        };
+
+        // Undoing a deleted line leaves redo working.
+        editor->setProperty("text", QStringLiteral("a\nb\nc"));
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        QMetaObject::invokeMethod(editor, "select", Q_ARG(int, 2), Q_ARG(int, 4));
+        QTest::keyClick(window, Qt::Key_Delete);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("a\nc"));
+        QMetaObject::invokeMethod(editor, "undo");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("a\nb\nc"));
+        QVERIFY(document->isRedoAvailable());
+
+        // Lines written over others keep the line height, however many there are.
+        editor->setProperty("text", QStringLiteral("aa\nbb\ncc"));
+        QGuiApplication::clipboard()->setText(QStringLiteral("X\nY"));
+        QMetaObject::invokeMethod(editor, "select", Q_ARG(int, 0), Q_ARG(int, 5));
+        QMetaObject::invokeMethod(editor, "paste");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("X\nY\ncc"));
+        QVERIFY(allLinesSpaced());
+    }
+
+    void searchFollowsEditsWithoutTakingTheCaret() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *searchField = window->findChild<QObject *>(QStringLiteral("searchField"));
+        QVERIFY(editor);
+        QVERIFY(searchField);
+
+        editor->setProperty("text", QStringLiteral("foo bar foo"));
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("foo"));
+        QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("foo"));
+
+        // Back in the text, typing goes where the caret is.
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        editor->setProperty("cursorPosition", 7);
+        QTest::keyClick(window, 'x');
+        QTest::keyClick(window, 'y');
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("foo barxy foo"));
+        QCOMPARE(window->property("searchMatches").toList().size(), 2);
+
+        // The current match's highlight leaves its old block even when text
+        // above it is deleted.
+        auto *quickDocument = qobject_cast<QQuickTextDocument *>(
+            editor->property("textDocument").value<QObject *>());
+        QVERIFY(quickDocument);
+        QTextDocument *document = quickDocument->textDocument();
+        const auto matchBackground = [document](int blockNumber) {
+            const QTextBlock block = document->findBlockByNumber(blockNumber);
+            for (const QTextLayout::FormatRange &range : block.layout()->formats()) {
+                if (range.start == 0 && range.format.hasProperty(QTextFormat::BackgroundBrush))
+                    return range.format.background().color();
+            }
+            return QColor();
+        };
+        editor->setProperty("text", QStringLiteral("long text\nfoo\nfoo"));
+        searchField->setProperty("text", QStringLiteral("x"));
+        searchField->setProperty("text", QStringLiteral("foo"));
+        QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
+        const QColor current = matchBackground(2);
+        const QColor other = matchBackground(1);
+        QVERIFY(current.isValid() && other.isValid() && current != other);
+        QMetaObject::invokeMethod(editor, "remove", Q_ARG(int, 0), Q_ARG(int, 10));
+        QCOMPARE(window->property("searchMatches").toList().size(), 2);
+        QCOMPARE(window->property("searchMatchIndex").toInt(), 0);
+        QCOMPARE(matchBackground(0), current);
+        QCOMPARE(matchBackground(1), other);
+
+        // Nor does it stay behind when another match moves into its offset.
+        editor->setProperty("text", QStringLiteral("foo\nab\nfoo"));
+        QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
+        QCOMPARE(matchBackground(2), current);
+        QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 0), Q_ARG(QString, QStringLiteral("abcdefg")));
+        QCOMPARE(window->property("searchMatches").toList().first().toInt(), 7);
+        QCOMPARE(matchBackground(2), other);
+
+        // Matches are found where the highlighter finds them, even past a
+        // character whose lowercase is longer.
+        editor->setProperty("text", QString::fromUtf8("\xC4\xB0 ab"));
+        searchField->setProperty("text", QStringLiteral("ab"));
+        QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("ab"));
+    }
+
+    void replacesOneMatchAfterAnother() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *searchField = window->findChild<QObject *>(QStringLiteral("searchField"));
+        QObject *replaceField = window->findChild<QObject *>(QStringLiteral("replaceField"));
+        QObject *replaceButton = window->findChild<QObject *>(QStringLiteral("replaceButton"));
+        QObject *replaceAllButton = window->findChild<QObject *>(QStringLiteral("replaceAllButton"));
+        QVERIFY(editor && searchField && replaceField && replaceButton && replaceAllButton);
+
+        editor->setProperty("text", QStringLiteral("foo foo foo"));
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("foo"));
+        replaceField->setProperty("text", QStringLiteral("Foo"));
+
+        // A replacement the query still matches is not found again.
+        QMetaObject::invokeMethod(replaceButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("Foo foo foo"));
+        QMetaObject::invokeMethod(replaceButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("Foo Foo foo"));
+        QMetaObject::invokeMethod(replaceButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("Foo Foo Foo"));
+
+        // Replace All is one edit, so one undo takes it back.
+        editor->setProperty("text", QStringLiteral("a foo b foo c"));
+        replaceField->setProperty("text", QStringLiteral("x"));
+        QMetaObject::invokeMethod(replaceAllButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("a x b x c"));
+        QMetaObject::invokeMethod(editor, "undo");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("a foo b foo c"));
+    }
+
+    void reachesAndLeavesTheReplaceFieldFromTheKeyboard() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *replaceField = window->findChild<QObject *>(QStringLiteral("replaceField"));
+        QVERIFY(editor && replaceField);
+
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QTRY_VERIFY(replaceField->property("activeFocus").toBool());
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("searchOpen").toBool());
+
+        // Escape closes the bar from the Replace field itself too.
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        QMetaObject::invokeMethod(replaceField, "forceActiveFocus");
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("searchOpen").toBool());
+
+        // A link inserted from the find bar puts the writer back in the text.
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_K, Qt::ControlModifier);
+        QVERIFY(editor->property("activeFocus").toBool());
+    }
+
+    void keepsShortcutsBehindDialogs() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *dialog = window->findChild<QObject *>(QStringLiteral("unsavedChangesDialog"));
+        QVERIFY(dialog);
+
+        QMetaObject::invokeMethod(dialog, "open");
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        QVERIFY(!window->property("searchOpen").toBool());
+        QMetaObject::invokeMethod(dialog, "close");
+    }
+
+    void togglesTheFontPickerFromItsButton() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *button = window->findChild<QQuickItem *>(QStringLiteral("fontButton"));
+        QObject *picker = window->findChild<QObject *>(QStringLiteral("fontPicker"));
+        QVERIFY(button && picker);
+
+        const QPoint center = button->mapToScene(
+            QPointF(button->width() / 2, button->height() / 2)).toPoint();
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, center);
+        QTRY_VERIFY(picker->property("opened").toBool());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, center);
+        QTRY_VERIFY(!picker->property("visible").toBool());
+    }
+
+    void breaksLinesAfterInlineBackticks() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+
+        // Backticks that open no fence leave the paragraphs below as prose.
+        const QString text = QStringLiteral("```x``` inline\n\npara");
+        editor->setProperty("text", text);
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        editor->setProperty("cursorPosition", text.length());
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(), text + QStringLiteral("\n\n"));
+
+        // Before a closing fence the caret is still in the code; before an
+        // opening one it is not yet.
+        editor->setProperty("text", QStringLiteral("```\ncode\n```"));
+        editor->setProperty("cursorPosition", 9);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("```\ncode\n\n```"));
+        editor->setProperty("text", QStringLiteral("para\n```\ncode\n```"));
+        editor->setProperty("cursorPosition", 5);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(),
+                 QStringLiteral("para\n\n\n```\ncode\n```"));
+
+        // Tilde fences hold code the same way.
+        editor->setProperty("text", QStringLiteral("~~~\ncode"));
+        editor->setProperty("cursorPosition", 8);
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("~~~\ncode\n"));
+    }
+
     void togglesEmphasisMarkers() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -254,6 +571,8 @@ private slots:
     }
 
     void showsLinkUrlOnlyOverTheLinkText() {
+        // Probing a character past the end of the text warns from QTextCursor.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("out of range")));
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
 
@@ -1028,6 +1347,11 @@ private slots:
             import "EditorMutations.js" as EditorMutations
 
             TextEdit {
+                function replaceText(start, end, replacement) {
+                    remove(start, end);
+                    insert(start, replacement);
+                }
+
                 property string insertionText
                 property int insertionCursor
                 property string wrappedText

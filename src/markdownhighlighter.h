@@ -3,6 +3,7 @@
 #include <QRegularExpression>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
+#include <QTextCursor>
 
 class MarkdownHighlighter : public QSyntaxHighlighter {
     Q_OBJECT
@@ -74,6 +75,9 @@ private:
     QTextCharFormat m_linkFormat;
     QString m_searchQuery;
     int m_currentMatchStart = -1;
+    // Moves with edits, so it still finds the block the current match was
+    // painted in after text above it changes.
+    QTextCursor m_currentMatch;
     QTextCharFormat m_searchFormat;
     QTextCharFormat m_currentSearchFormat;
 };

@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QTextBlock>
 #include <QTextDocument>
 
 #include <algorithm>
@@ -38,11 +39,33 @@ void MarkdownHighlighter::refreshFont() {
 }
 
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
-    if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
+    // An edit can carry the painted match away from an offset another match
+    // now holds, so the offset matching is not enough to leave things be.
+    const bool matchStayed = m_currentMatch.isNull() ? currentMatchStart < 0
+                                                     : m_currentMatch.position() == currentMatchStart;
+    if (m_searchQuery == query && m_currentMatchStart == currentMatchStart && matchStayed)
         return;
+    const bool sameQuery = m_searchQuery == query;
+    const QTextBlock left = m_currentMatch.isNull() ? QTextBlock() : m_currentMatch.block();
     m_searchQuery = query;
     m_currentMatchStart = currentMatchStart;
-    rehighlight();
+    m_currentMatch = QTextCursor();
+    if (currentMatchStart >= 0) {
+        m_currentMatch = QTextCursor(document());
+        m_currentMatch.setPosition(qBound(0, currentMatchStart, document()->characterCount() - 1));
+    }
+    if (!sameQuery) {
+        rehighlight();
+        return;
+    }
+
+    // Only the current match moved, so restyle just the blocks it left and
+    // entered rather than the whole document.
+    const QTextBlock entered = m_currentMatch.isNull() ? QTextBlock() : m_currentMatch.block();
+    if (left.isValid())
+        rehighlightBlock(left);
+    if (entered.isValid() && entered != left)
+        rehighlightBlock(entered);
 }
 
 void MarkdownHighlighter::rebuildFormats() {

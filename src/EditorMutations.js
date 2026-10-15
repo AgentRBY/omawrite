@@ -10,17 +10,13 @@ function replaceRange(editor, rangeStart, rangeEnd, replacement,
     var end = Math.max(start, Math.min(editor.text.length, rangeEnd));
     var insertedText = normalizePlainText(replacement);
 
-    if (start !== end)
-        editor.remove(start, end);
+    // The editor makes the change as one edit, so a single undo takes it back.
+    editor.replaceText(start, end, insertedText);
 
-    editor.cursorPosition = start;
-    editor.insert(start, insertedText);
-
-    // TextEdit.insert() already leaves the caret after the inserted text. Only
-    // move it again when the caller deliberately requests a selection/caret
-    // within the replacement.
+    // The caret lands after the inserted text unless the caller asks for a
+    // selection or caret within it.
+    var insertedEnd = start + insertedText.length;
     if (selectionStartOffset !== undefined && selectionEndOffset !== undefined) {
-        var insertedEnd = editor.cursorPosition;
         var selectionStart = Math.max(start,
                                       Math.min(insertedEnd, start + selectionStartOffset));
         var selectionEnd = Math.max(start,
@@ -29,6 +25,8 @@ function replaceRange(editor, rangeStart, rangeEnd, replacement,
             editor.cursorPosition = selectionStart;
         else
             editor.select(selectionStart, selectionEnd);
+    } else {
+        editor.cursorPosition = insertedEnd;
     }
 
     return insertedText;
@@ -38,8 +36,8 @@ function replaceRange(editor, rangeStart, rangeEnd, replacement,
 // selection, and wraps otherwise. A marker only counts as a whole run, so the
 // "*" of "**bold**" is not taken for italic; "***" counts as both.
 function toggleWrap(editor, marker) {
-    var start = Math.min(editor.selectionStart, editor.selectionEnd);
-    var end = Math.max(editor.selectionStart, editor.selectionEnd);
+    var start = editor.selectionStart;
+    var end = editor.selectionEnd;
     var text = editor.text;
     var size = marker.length;
     var mark = marker.charAt(0);

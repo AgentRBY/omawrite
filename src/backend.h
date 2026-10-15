@@ -92,6 +92,9 @@ public:
     Q_INVOKABLE QString linkUrlAt(int position) const;
     Q_INVOKABLE int cursorPositionStep(int position, int direction) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
+    Q_INVOKABLE QVariantList searchMatches(const QString &query) const;
+    Q_INVOKABLE void replaceRange(int start, int end, const QString &text);
+    Q_INVOKABLE bool insideFence(int position) const;
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
     Q_INVOKABLE void documentFontChanged();
@@ -155,7 +158,6 @@ private:
     qreal m_textZoom = 1.0;
     bool m_loading = false;
     bool m_formattingTypography = false;
-    int m_formattedBlockCount = 0;
     int m_lastChangePos = 0;
     int m_lastChangeAdded = 0;
     QTimer m_wordCountTimer;
