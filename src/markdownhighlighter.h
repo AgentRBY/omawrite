@@ -14,6 +14,7 @@ public:
     void setColors(const QString &background, const QString &foreground, const QString &accent,
                    const QString &codeBackground);
     void setSearch(const QString &query, int currentMatchStart);
+    void refreshFont();
 
     struct Span {
         int start;

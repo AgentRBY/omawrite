@@ -33,6 +33,13 @@ void MarkdownHighlighter::setColors(const QString &background, const QString &fo
     rehighlight();
 }
 
+// The hidden marker spacing is measured from the document's default font, so
+// it has to be remeasured whenever the editor switches typeface.
+void MarkdownHighlighter::refreshFont() {
+    rebuildFormats();
+    rehighlight();
+}
+
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
     if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
         return;
@@ -291,8 +298,11 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
                 {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
     }
 
+    // An asterisk delimiter may not be followed (opening) or preceded
+    // (closing) by whitespace, so `* first *important* point` keeps its bullet
+    // and `2 * 3 * 4` stays literal instead of pairing stray asterisks.
     static const QRegularExpression italicRe(
-        QStringLiteral("(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
+        QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
         QRegularExpression::UseUnicodePropertiesOption);
     QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(text);
     while (italicMatches.hasNext()) {
