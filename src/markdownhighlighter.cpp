@@ -191,13 +191,36 @@ void MarkdownHighlighter::highlightMarkers(const QString &text) {
 
 void MarkdownHighlighter::highlightInline(const QString &text) {
     const QList<InlineMarkup> markup = inlineMarkup(text);
+    QList<bool> hidden(text.length(), false);
     for (const InlineMarkup &item : markup) {
+        if (item.kind == InlineKind::Strikethrough)
+            continue;
         const QTextCharFormat &contentFormat =
             item.kind == InlineKind::Bold ? m_boldFormat
             : item.kind == InlineKind::Italic ? m_italicFormat
-            : item.kind == InlineKind::Strikethrough ? m_strikethroughFormat
-                                                     : m_linkFormat;
+                                              : m_linkFormat;
         setFormat(item.content.start, item.content.length, contentFormat);
+        for (const Span &marker : item.markers) {
+            setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
+            for (int i = marker.start; i < marker.start + marker.length; ++i)
+                hidden[i] = true;
+        }
+    }
+
+    // Strikethrough layers over whatever emphasis it encloses rather than
+    // replacing it, and leaves the enclosed markers hidden.
+    for (const InlineMarkup &item : markup) {
+        if (item.kind != InlineKind::Strikethrough)
+            continue;
+        for (int i = item.content.start; i < item.content.start + item.content.length; ++i) {
+            if (hidden[i])
+                continue;
+            QTextCharFormat struck = format(i);
+            struck.setFontStrikeOut(true);
+            if (!struck.foreground().style())
+                struck.setForeground(m_strikethroughFormat.foreground());
+            setFormat(i, 1, struck);
+        }
         for (const Span &marker : item.markers)
             setFormat(marker.start, marker.length, m_hiddenMarkerFormat);
     }

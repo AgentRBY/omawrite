@@ -431,6 +431,27 @@ private slots:
         QCOMPARE(markup.at(0).kind, MarkdownHighlighter::InlineKind::Strikethrough);
     }
 
+    void strikesThroughNestedEmphasis() {
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("~~**bold**~~"));
+        MarkdownHighlighter highlighter(&document);
+        highlighter.rehighlight();
+
+        const auto formatAt = [&document](int position) {
+            QTextCharFormat found;
+            for (const auto &range : document.firstBlock().layout()->formats()) {
+                if (position >= range.start && position < range.start + range.length)
+                    found = range.format;
+            }
+            return found;
+        };
+        // The word is bold and struck; the bold markers stay hidden.
+        QVERIFY(formatAt(4).fontStrikeOut());
+        QCOMPARE(formatAt(4).fontWeight(), int(QFont::Bold));
+        QCOMPARE(formatAt(2).fontPointSize(), formatAt(0).fontPointSize());
+        QVERIFY(formatAt(2).fontPointSize() < 2);
+    }
+
     void togglesWrappedSelection() {
         const QString mutationsPath = QFINDTESTDATA("../src/EditorMutations.js");
         QVERIFY(!mutationsPath.isEmpty());
@@ -451,6 +472,8 @@ private slots:
                 property string italicAroundBold
                 property string boldAcrossRuns
                 property string boldInsideRuns
+                property string italicOffInsideBold
+                property string boldOffInsideItalic
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -487,6 +510,18 @@ private slots:
                     select(2, 13);
                     EditorMutations.toggleWrap(this, "**", "**");
                     boldInsideRuns = text;
+
+                    // Each shortcut takes back what it added to a combined run.
+                    text = "**bold**";
+                    select(2, 6);
+                    EditorMutations.toggleWrap(this, "*", "*");
+                    EditorMutations.toggleWrap(this, "*", "*");
+                    italicOffInsideBold = text;
+
+                    text = "***bold***";
+                    select(3, 7);
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    boldOffInsideItalic = text;
                 }
             }
         )QML";
@@ -513,6 +548,10 @@ private slots:
                  QStringLiteral("****a** and **b****"));
         QCOMPARE(editor->property("boldInsideRuns").toString(),
                  QStringLiteral("****a** and **b****"));
+        QCOMPARE(editor->property("italicOffInsideBold").toString(),
+                 QStringLiteral("**bold**"));
+        QCOMPARE(editor->property("boldOffInsideItalic").toString(),
+                 QStringLiteral("*bold*"));
     }
 
     void keepsCursorAndSelectionStableAcrossInsertions() {
