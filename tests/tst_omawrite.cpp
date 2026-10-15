@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 #include <QClipboard>
 #include <QMimeData>
+#include "cli.h"
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -84,6 +85,31 @@ private slots:
         QCOMPARE(Backend::suggestedFileName(QString()), QStringLiteral("Untitled.md"));
         QCOMPARE(Backend::suggestedFileName(QStringLiteral("Already.md")),
                  QStringLiteral("Already.md"));
+    }
+
+    void answersHelpBeforeOpeningAWindow() {
+        const QString usage = Cli::usage();
+        QVERIFY(usage.contains(QStringLiteral("omawrite [FILE]")));
+        QVERIFY(usage.contains(QStringLiteral("-h, --help")));
+        QVERIFY(usage.contains(QStringLiteral("-v, --version")));
+
+        const QString version = QStringLiteral("1.2.3");
+        const auto answer = [&](const QStringList &arguments) {
+            return Cli::handleArguments(QStringList{QStringLiteral("omawrite")} + arguments,
+                                        version);
+        };
+        QCOMPARE(answer({QStringLiteral("--help")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("-h")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("--version")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("-v")}), std::optional<int>(0));
+
+        // Everything else is the app's: no arguments, a file, and Qt's own
+        // options, which a leading dash must not turn into an error.
+        QCOMPARE(answer({}), std::nullopt);
+        QCOMPARE(answer({QStringLiteral("draft.md")}), std::nullopt);
+        QCOMPARE(answer({QStringLiteral("-platform"), QStringLiteral("offscreen")}),
+                 std::nullopt);
+        QCOMPARE(answer({QStringLiteral("-notes.md")}), std::nullopt);
     }
 
     void printsInPointsNotPixels() {

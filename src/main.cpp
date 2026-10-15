@@ -9,20 +9,18 @@
 #include <QUrl>
 #include <QWindow>
 #include <QFile>
-#include <cstdio>
-#include <cstring>
 
 #include "backend.h"
+#include "cli.h"
 #include "systemtheme.h"
 
 #define OMAWRITE_VERSION "0.6.0"
 
 int main(int argc, char *argv[]) {
-    // Answered before the application exists, so it needs no display.
-    if (argc > 1 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
-        printf("omawrite %s\n", OMAWRITE_VERSION);
-        return 0;
-    }
+    // Answered before the application exists, so they need no display.
+    if (const std::optional<int> exitCode =
+            Cli::handleArguments(argc, argv, QStringLiteral(OMAWRITE_VERSION)))
+        return *exitCode;
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("omawrite"));
