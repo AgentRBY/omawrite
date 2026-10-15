@@ -478,9 +478,10 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     if (!block.isValid())
         return ranges;
 
-    // The highlighter leaves fenced code alone, so it hides nothing there.
-    if (block.userState() == MarkdownHighlighter::InsideFence
-            || MarkdownHighlighter::isFence(block.text()))
+    // The highlighter leaves fenced code alone, so it hides nothing there. A
+    // closing fence is the line whose previous block is still inside.
+    if (block.userState() >= MarkdownHighlighter::InsideFence
+            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
         return ranges;
 
     const int lineStart = block.position();

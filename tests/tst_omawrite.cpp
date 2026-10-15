@@ -308,6 +308,35 @@ private slots:
                             }));
     }
 
+    void opensFencesOnlyWhereMarkdownDoes() {
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("```inline``` and _italic_\n"
+                                            "````md\n"
+                                            "```\n"
+                                            "still code\n"
+                                            "````\n"
+                                            "after _italic_\n"));
+        MarkdownHighlighter highlighter(&document);
+        highlighter.setColors("#101010", "#eeeeee", "#5584aa", "#23372b");
+        highlighter.rehighlight();
+
+        const auto stateOf = [&document](int blockNumber) {
+            return document.findBlockByNumber(blockNumber).userState();
+        };
+        // Backticks that close on the same line are inline code, not a fence.
+        QCOMPARE(stateOf(0), int(MarkdownHighlighter::Prose));
+        // A four-backtick fence is not closed by three.
+        QVERIFY(stateOf(1) >= int(MarkdownHighlighter::InsideFence));
+        QVERIFY(stateOf(2) >= int(MarkdownHighlighter::InsideFence));
+        QVERIFY(stateOf(3) >= int(MarkdownHighlighter::InsideFence));
+        QCOMPARE(stateOf(4), int(MarkdownHighlighter::Prose));
+        QCOMPARE(stateOf(5), int(MarkdownHighlighter::Prose));
+
+        QCOMPARE(MarkdownHighlighter::openingFenceLength(QStringLiteral("```ruby")), 3);
+        QCOMPARE(MarkdownHighlighter::openingFenceLength(QStringLiteral("    ```")), 0);
+        QVERIFY(!MarkdownHighlighter::closesFence(QStringLiteral("``` text"), 3));
+    }
+
     void keepsCaretRangesConsistentWithCode() {
         Backend backend;
         QQmlEngine engine;
@@ -324,7 +353,7 @@ private slots:
         QVERIFY(highlighter);
         editor->setProperty("text", QStringLiteral("``` **opening**\n"
                                                    "# _literal_ [link](url)\n"
-                                                   "``` **closing**\n"
+                                                   "```  \n"
                                                    "*prose*\n"
                                                    "`*literal*`\n"
                                                    "```\n"

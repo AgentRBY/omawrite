@@ -25,6 +25,8 @@ public:
 
     // Carried from block to block so a fenced run of code knows it is inside
     // one. Stored on the block, which is where Backend::hiddenRangesAt reads it.
+    // Inside a fence the state is InsideFence plus however many backticks past
+    // three opened it, since only a fence at least that long closes it.
     enum BlockState { Prose = 0, InsideFence = 1 };
 
     struct InlineMarkup {
@@ -40,7 +42,8 @@ public:
 
     // Inline code spans, backticks included.
     static QList<Span> codeSpans(const QString &text);
-    static bool isFence(const QString &text);
+    static int openingFenceLength(const QString &text);
+    static bool closesFence(const QString &text, int openingLength);
 
 protected:
     void highlightBlock(const QString &text) override;

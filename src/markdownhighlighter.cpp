@@ -118,18 +118,23 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
     // A fenced run of code is literal from its opening fence through its
     // closing one, so no markup runs inside it. The state rides from block to
     // block, and Qt rehighlights the rest of the document when it changes.
-    const bool fence = isFence(text);
-    const bool insideFence = previousBlockState() == InsideFence;
-    if (fence)
-        setCurrentBlockState(insideFence ? Prose : InsideFence);
-    else
-        setCurrentBlockState(insideFence ? InsideFence : Prose);
-
-    if (fence || insideFence) {
-        setFormat(0, text.length(), fence ? m_fenceFormat : m_codeFormat);
+    const int previous = previousBlockState();
+    if (previous >= InsideFence) {
+        const bool closing = closesFence(text, previous - InsideFence + 3);
+        setCurrentBlockState(closing ? Prose : previous);
+        setFormat(0, text.length(), closing ? m_fenceFormat : m_codeFormat);
         highlightSearch(text);
         return;
     }
+
+    const int opening = openingFenceLength(text);
+    if (opening > 0) {
+        setCurrentBlockState(InsideFence + opening - 3);
+        setFormat(0, text.length(), m_fenceFormat);
+        highlightSearch(text);
+        return;
+    }
+    setCurrentBlockState(Prose);
 
     if (!text.isEmpty()) {
         highlightMarkers(text);
@@ -141,9 +146,19 @@ void MarkdownHighlighter::highlightBlock(const QString &text) {
     highlightSearch(text);
 }
 
-bool MarkdownHighlighter::isFence(const QString &text) {
-    static const QRegularExpression fenceRe(QStringLiteral("^\\s*```"));
-    return text.contains(QLatin1Char('`')) && fenceRe.match(text).hasMatch();
+// Three or more backticks, indented at most three spaces. An info string may
+// follow, but not one with a backtick in it: "```code```" is inline code.
+int MarkdownHighlighter::openingFenceLength(const QString &text) {
+    static const QRegularExpression openingRe(QStringLiteral("^ {0,3}(`{3,})[^`]*$"));
+    const QRegularExpressionMatch match = openingRe.match(text);
+    return match.hasMatch() ? int(match.capturedLength(1)) : 0;
+}
+
+// At least as many backticks as opened the fence, and nothing after them.
+bool MarkdownHighlighter::closesFence(const QString &text, int openingLength) {
+    static const QRegularExpression closingRe(QStringLiteral("^ {0,3}(`{3,})\\s*$"));
+    const QRegularExpressionMatch match = closingRe.match(text);
+    return match.hasMatch() && match.capturedLength(1) >= openingLength;
 }
 
 void MarkdownHighlighter::highlightSearch(const QString &text) {
