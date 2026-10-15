@@ -527,6 +527,7 @@ ApplicationWindow {
             }
 
             onMovementStarted: wheelScroll.stop()
+            onContentYChanged: editor.hoveredLinkUrl = ""
 
             // Ctrl+wheel changes the text size, as it does in a browser. A
             // wheel notch is a whole step, but a touchpad trickles in pixels,
@@ -909,6 +910,7 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
+                    hoveredLinkUrl = "";
                     if (win.searchUpdating)
                         return;
                     var contentChanged = backend.editorTextChanged();
@@ -925,6 +927,59 @@ ApplicationWindow {
                     font.family: editor.font.family
                     font.pixelSize: editor.font.pixelSize
                     font.weight: editor.font.weight
+                }
+
+                property string hoveredLinkUrl: ""
+                property real linkHoverX: 0
+                property real linkHoverY: 0
+
+                // positionAt() snaps to the nearest caret, even past the end of a
+                // line, so only count a character the pointer is inside: the one
+                // on either side of that caret, whichever way the text runs.
+                function linkUrlUnder(x, y) {
+                    var caret = positionAt(x, y);
+                    for (var position = Math.max(0, caret - 1); position <= caret; ++position) {
+                        var box = positionToRectangle(position);
+                        var next = positionToRectangle(position + 1);
+                        // A hidden marker has no width; only a line's last
+                        // character needs an estimate.
+                        var edge = next.y === box.y
+                            ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
+                        if (y >= box.y && y < box.y + box.height
+                                && x >= Math.min(box.x, edge) && x < Math.max(box.x, edge))
+                            return backend.linkUrlAt(position);
+                    }
+                    return "";
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    hoverEnabled: true
+                    cursorShape: Qt.IBeamCursor
+                    onPositionChanged: (mouse) => {
+                        editor.linkHoverX = mouse.x;
+                        editor.linkHoverY = mouse.y;
+                        editor.hoveredLinkUrl = editor.linkUrlUnder(mouse.x, mouse.y);
+                    }
+                    onExited: editor.hoveredLinkUrl = ""
+                }
+
+                ToolTip {
+                    visible: editor.hoveredLinkUrl.length > 0
+                    x: editor.linkHoverX + 12
+                    y: editor.linkHoverY + 20
+                    contentItem: Label {
+                        objectName: "linkTooltipText"
+                        // A destination is document text; AutoText would render
+                        // one that looks like HTML instead of showing it.
+                        textFormat: Text.PlainText
+                        text: editor.hoveredLinkUrl
+                        font.family: backend.editorFont
+                        font.pixelSize: win.scaledSize(12)
+                        elide: Text.ElideMiddle
+                    }
+                    width: Math.min(implicitWidth, win.width - 32)
                 }
 
                 Component.onCompleted: {

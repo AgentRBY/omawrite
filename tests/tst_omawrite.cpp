@@ -174,6 +174,125 @@ private slots:
         QCOMPARE(markup.at(2).markers[0].length, 1);
     }
 
+    void findsLinkUrlAtPosition() {
+        const QString text = QStringLiteral("Read [site](https://example.com/docs) now");
+        const int linkStart = text.indexOf(QStringLiteral("site"));
+
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(text, linkStart),
+                 QStringLiteral("https://example.com/docs"));
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(text, linkStart + 3),
+                 QStringLiteral("https://example.com/docs"));
+        QVERIFY(MarkdownHighlighter::linkUrlAt(text, linkStart - 1).isEmpty());
+        QVERIFY(MarkdownHighlighter::linkUrlAt(text, text.indexOf(QStringLiteral("https"))).isEmpty());
+
+        // Escaped punctuation, as the editor writes for parentheses, reads as itself.
+        const QString escaped = QStringLiteral(R"([wiki](https://example.com/a\(b\)))");
+        QCOMPARE(MarkdownHighlighter::linkUrlAt(escaped, 1),
+                 QStringLiteral("https://example.com/a(b)"));
+    }
+
+    void showsLinkUrlOnlyOverTheLinkText() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        editor->setProperty("text", QStringLiteral("see [label](https://example.com)\nplain"));
+
+        const auto urlUnder = [editor](qreal x, qreal y) {
+            QVariant url;
+            QMetaObject::invokeMethod(editor, "linkUrlUnder", Q_RETURN_ARG(QVariant, url),
+                                      Q_ARG(QVariant, x), Q_ARG(QVariant, y));
+            return url.toString();
+        };
+        const auto boxAt = [editor](int position) {
+            QRectF box;
+            QMetaObject::invokeMethod(editor, "positionToRectangle", Q_RETURN_ARG(QRectF, box),
+                                      Q_ARG(int, position));
+            return box;
+        };
+
+        // Over the label (the hidden "[" is index 4), in the right half of a
+        // character too.
+        const QRectF first = boxAt(5);
+        const QRectF second = boxAt(6);
+        const qreal middleY = first.y() + first.height() / 2;
+        QCOMPARE(urlUnder(first.x() + 1, middleY), QStringLiteral("https://example.com"));
+        QCOMPARE(urlUnder(second.x() - 1, middleY), QStringLiteral("https://example.com"));
+        // Over the plain word before it.
+        QCOMPARE(urlUnder(boxAt(0).x() + 1, middleY), QString());
+        // Past the end of the line the link ends.
+        QCOMPARE(urlUnder(editor->property("width").toReal() - 2, middleY), QString());
+        // The right half of the label's last character still counts, though
+        // the nearest caret position is past the label.
+        QCOMPARE(urlUnder(boxAt(10).x() - 1, middleY), QStringLiteral("https://example.com"));
+
+        // Below a last line that is a link, positionAt() snaps up onto it.
+        editor->setProperty("text", QStringLiteral("[label](https://example.com)"));
+        const QRectF only = boxAt(1);
+        QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() / 2),
+                 QStringLiteral("https://example.com"));
+        QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() * 3), QString());
+
+        // A wide character counts across its whole width.
+        editor->setProperty("text", QStringLiteral("[\u5bbd](https://example.com)"));
+        const QRectF wide = boxAt(1);
+        const qreal wideRight = boxAt(2).x();
+        QVERIFY(wideRight - wide.x() > editor->property("font").value<QFont>().pixelSize() * 0.7);
+        QCOMPARE(urlUnder(wideRight - 1, wide.y() + wide.height() / 2),
+                 QStringLiteral("https://example.com"));
+
+        // A right-to-left label runs the other way across the screen.
+        editor->setProperty("text", QStringLiteral("[\u05e9\u05dc\u05d5\u05dd](https://example.org)"));
+        const QRectF rtlFirst = boxAt(1);
+        const QRectF rtlSecond = boxAt(2);
+        QVERIFY(rtlSecond.x() < rtlFirst.x());
+        const qreal rtlY = rtlFirst.y() + rtlFirst.height() / 2;
+        QCOMPARE(urlUnder((rtlFirst.x() + rtlSecond.x()) / 2, rtlY),
+                 QStringLiteral("https://example.org"));
+        QCOMPARE(urlUnder(rtlFirst.x() - 1, rtlY), QStringLiteral("https://example.org"));
+
+        // Link-like text inside fenced code is not a link.
+        editor->setProperty("text", QStringLiteral("```\n[label](https://example.com)\n```"));
+        QCOMPARE(backend.linkUrlAt(5), QString());
+    }
+
+    void showsLinkTooltipUrlAsPlainText() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *tooltipText =
+            window->findChild<QObject *>(QStringLiteral("linkTooltipText"));
+        QVERIFY(tooltipText);
+
+        // A destination Qt would mistake for HTML must still read as itself.
+        const QString destination =
+            QStringLiteral("<img src=\"https://example.com/pixel\">");
+        QVERIFY(Qt::mightBeRichText(destination));
+        tooltipText->setProperty("text", destination);
+        QCOMPARE(tooltipText->property("text").toString(), destination);
+        QCOMPARE(tooltipText->property("textFormat").toInt(), int(Qt::PlainText));
+    }
+
     void leavesInlineCodeLiteral() {
         QVERIFY(MarkdownHighlighter::inlineMarkup(
                     QStringLiteral("see `default_line_height` and `file_name`")).isEmpty());
