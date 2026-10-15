@@ -448,6 +448,7 @@ private slots:
         QCOMPARE(spaced.size(), 1);
         QCOMPARE(spaced.at(0).content.start, 23);
         QCOMPARE(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\~~not~~")).size(), 0);
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(QStringLiteral("~~~word~~~")).size(), 0);
     }
 
     void strikesThroughNestedEmphasis() {
@@ -506,6 +507,7 @@ private slots:
                 property string caretInsideBoldDelimiter
                 property string boldRunsAroundComma
                 property string caretInsideAccentedBold
+                property string literalAsterisks
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -589,6 +591,11 @@ private slots:
                     cursorPosition = 1;
                     EditorMutations.toggleWrap(this, "*", "*");
                     caretInsideAccentedBold = text;
+
+                    text = "2 * 3 * 4";
+                    select(3, 6);
+                    EditorMutations.toggleWrap(this, "*", "*");
+                    literalAsterisks = text;
                 }
             }
         )QML";
@@ -628,6 +635,8 @@ private slots:
                  QStringLiteral("****a **b** c****"));
         QCOMPARE(editor->property("boldRunsAroundComma").toString(),
                  QStringLiteral("****a**,**b****"));
+        QCOMPARE(editor->property("literalAsterisks").toString(),
+                 QStringLiteral("2 ** 3 ** 4"));
         QVERIFY(editor->property("caretInsideAccentedBold").toString()
                     .startsWith(QStringLiteral("**")));
         // Half of a bold delimiter is not an empty italic pair to remove.

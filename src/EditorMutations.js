@@ -76,7 +76,10 @@ function toggleWrap(editor, before, after) {
     var standsAlone = content.length > 0
         || (bounded(text.charAt(start - outsideBefore - 1))
             && bounded(text.charAt(end + outsideAfter)));
-    if (left === right && holds(left) && standsAlone && !spansRuns(content)) {
+    // Markers beside space are literal, as in "2 * 3 * 4", not emphasis.
+    var hugsContent = content.length === 0
+        || (!/\s/.test(content.charAt(0)) && !/\s/.test(content.charAt(content.length - 1)));
+    if (left === right && holds(left) && standsAlone && hugsContent && !spansRuns(content)) {
         var keep = Array(left - size + 1).join(mark);
         var rangeStart = start - outsideBefore;
         replaceRange(editor, rangeStart, end + outsideAfter, keep + content + keep,

@@ -308,19 +308,22 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
         bool closes;
     };
     QList<Tilde> tildes;
-    for (int i = 0; i + 1 < text.length(); ++i) {
-        if (text.at(i) != QLatin1Char('~') || text.at(i + 1) != QLatin1Char('~')
-                || codeCovers(i) || codeCovers(i + 1))
+    for (int i = 0; i < text.length(); ++i) {
+        if (text.at(i) != QLatin1Char('~'))
             continue;
+        // Only a run of exactly two delimits; longer runs stay literal.
+        int run = 1;
+        while (i + run < text.length() && text.at(i + run) == QLatin1Char('~'))
+            ++run;
         int backslashes = 0;
         for (int j = i - 1; j >= 0 && text.at(j) == QLatin1Char('\\'); --j)
             ++backslashes;
-        if (backslashes % 2 == 0) {
+        if (run == 2 && backslashes % 2 == 0 && !codeCovers(i) && !codeCovers(i + 1)) {
             const bool opens = i + 2 < text.length() && !text.at(i + 2).isSpace();
             const bool closes = i > 0 && !text.at(i - 1).isSpace();
             tildes.append({i, opens, closes});
         }
-        ++i;
+        i += run - 1;
     }
     for (int k = 0; k < tildes.size(); ++k) {
         if (!tildes.at(k).opens)
