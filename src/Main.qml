@@ -894,18 +894,25 @@ ApplicationWindow {
 
                 // positionAt() snaps to the nearest caret position, so past the
                 // end of a line it still lands on the last character. Only count
-                // a character the pointer is actually over.
+                // a character the pointer is actually over: the one on either side
+                // of that caret position, whichever way the text runs.
                 function characterUnder(x, y) {
-                    var position = positionAt(x, y);
-                    var box = positionToRectangle(position);
-                    if (position > 0 && box.x > x)
-                        box = positionToRectangle(--position);
-                    if (y < box.y || y >= box.y + box.height || x < box.x)
-                        return -1;
-                    var next = positionToRectangle(position + 1);
-                    var right = next.y === box.y && next.x > box.x
-                        ? next.x : box.x + writerFontMetrics.averageCharacterWidth;
-                    return x < right && position < length ? position : -1;
+                    var caret = positionAt(x, y);
+                    for (var position = caret; position >= caret - 1; --position) {
+                        if (position < 0 || position >= length)
+                            continue;
+                        var box = positionToRectangle(position);
+                        if (y < box.y || y >= box.y + box.height)
+                            continue;
+                        var next = positionToRectangle(position + 1);
+                        var width = next.y === box.y && next.x !== box.x
+                            ? next.x - box.x : writerFontMetrics.averageCharacterWidth;
+                        var left = Math.min(box.x, box.x + width);
+                        var right = Math.max(box.x, box.x + width);
+                        if (x >= left && x < right)
+                            return position;
+                    }
+                    return -1;
                 }
 
                 function linkUrlUnder(x, y) {
