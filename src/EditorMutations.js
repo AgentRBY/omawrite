@@ -30,11 +30,24 @@ function toggleWrap(editor, before, after) {
             ++i;
         return i - position;
     };
-    // Markers inside the text mean the selection spans several runs, as in
-    // "**a** and **b**". Stripping the outer pair would leave the inner ones
-    // unmatched, so wrap the whole selection instead.
+    // Markers of this emphasis inside the text mean the selection spans
+    // several runs, as in "**a** and **b**". Stripping the outer pair would
+    // leave the inner ones unmatched, so wrap the whole selection instead.
+    // Other emphasis nested inside, like the bold in "*a **b** c*", is fine.
     var spansRuns = function(inner) {
-        return inner.indexOf(before) >= 0;
+        var i = 0;
+        while (i < inner.length) {
+            if (inner.charAt(i) !== mark) {
+                ++i;
+                continue;
+            }
+            var runStart = i;
+            while (i < inner.length && inner.charAt(i) === mark)
+                ++i;
+            if (holds(i - runStart))
+                return true;
+        }
+        return false;
     };
 
     // Selection includes the markers: strip them.
