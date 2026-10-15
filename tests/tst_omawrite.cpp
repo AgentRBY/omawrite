@@ -441,6 +441,13 @@ private slots:
         QCOMPARE(around.size(), 1);
         QCOMPARE(around.at(0).content.start, 2);
         QCOMPARE(around.at(0).content.length, 8);
+
+        // Spaced or escaped tildes are literal, as Markdown reads them.
+        const auto spaced = MarkdownHighlighter::inlineMarkup(
+            QStringLiteral("~~ not struck ~~ and ~~struck~~"));
+        QCOMPARE(spaced.size(), 1);
+        QCOMPARE(spaced.at(0).content.start, 23);
+        QCOMPARE(MarkdownHighlighter::inlineMarkup(QStringLiteral("\\~~not~~")).size(), 0);
     }
 
     void strikesThroughNestedEmphasis() {
@@ -498,6 +505,7 @@ private slots:
                 property string boldAroundBold
                 property string caretInsideBoldDelimiter
                 property string boldRunsAroundComma
+                property string caretInsideAccentedBold
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -576,6 +584,11 @@ private slots:
                     selectAll();
                     EditorMutations.toggleWrap(this, "**", "**");
                     boldRunsAroundComma = text;
+
+                    text = "**\u00e9clair**";
+                    cursorPosition = 1;
+                    EditorMutations.toggleWrap(this, "*", "*");
+                    caretInsideAccentedBold = text;
                 }
             }
         )QML";
@@ -615,6 +628,8 @@ private slots:
                  QStringLiteral("****a **b** c****"));
         QCOMPARE(editor->property("boldRunsAroundComma").toString(),
                  QStringLiteral("****a**,**b****"));
+        QVERIFY(editor->property("caretInsideAccentedBold").toString()
+                    .startsWith(QStringLiteral("**")));
         // Half of a bold delimiter is not an empty italic pair to remove.
         QVERIFY(editor->property("caretInsideBoldDelimiter").toString()
                     .endsWith(QStringLiteral("word**")));

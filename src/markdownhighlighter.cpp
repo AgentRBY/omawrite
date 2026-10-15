@@ -299,25 +299,42 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     }
 
     // Pair ~~ delimiters left to right, skipping any inside a code span, so
-    // tildes in code neither open nor close a strikethrough around them.
-    QList<int> tildes;
+    // tildes in code neither open nor close a strikethrough around them. As in
+    // Markdown, an opener is followed by text and a closer preceded by it, and
+    // a backslash escapes a tilde.
+    struct Tilde {
+        int position;
+        bool opens;
+        bool closes;
+    };
+    QList<Tilde> tildes;
     for (int i = 0; i + 1 < text.length(); ++i) {
-        if (text.at(i) == QLatin1Char('~') && text.at(i + 1) == QLatin1Char('~')
-                && !codeCovers(i) && !codeCovers(i + 1)) {
-            tildes.append(i);
-            ++i;
-        }
-    }
-    for (int k = 0; k + 1 < tildes.size();) {
-        const int open = tildes.at(k);
-        const int close = tildes.at(k + 1);
-        if (close == open + 2) {
-            ++k;
+        if (text.at(i) != QLatin1Char('~') || text.at(i + 1) != QLatin1Char('~')
+                || codeCovers(i) || codeCovers(i + 1))
             continue;
+        int backslashes = 0;
+        for (int j = i - 1; j >= 0 && text.at(j) == QLatin1Char('\\'); --j)
+            ++backslashes;
+        if (backslashes % 2 == 0) {
+            const bool opens = i + 2 < text.length() && !text.at(i + 2).isSpace();
+            const bool closes = i > 0 && !text.at(i - 1).isSpace();
+            tildes.append({i, opens, closes});
         }
-        markup.append({InlineKind::Strikethrough, {open + 2, close - open - 2},
-                       {{open, 2}, {close, 2}}});
-        k += 2;
+        ++i;
+    }
+    for (int k = 0; k < tildes.size(); ++k) {
+        if (!tildes.at(k).opens)
+            continue;
+        for (int c = k + 1; c < tildes.size(); ++c) {
+            const int open = tildes.at(k).position;
+            const int close = tildes.at(c).position;
+            if (!tildes.at(c).closes || close == open + 2)
+                continue;
+            markup.append({InlineKind::Strikethrough, {open + 2, close - open - 2},
+                           {{open, 2}, {close, 2}}});
+            k = c;
+            break;
+        }
     }
 
     static const QRegularExpression linkRe(

@@ -69,10 +69,13 @@ function toggleWrap(editor, before, after) {
     var content = selected.slice(leading, selected.length - trailing);
     // With nothing between them, the two sides may just be halves of one
     // longer delimiter, like the caret inside the "**" of "**word**". Only an
-    // empty pair standing on its own is ours to remove.
+    // empty pair with space or the line's end on both sides is ours to remove.
+    var bounded = function(character) {
+        return character === "" || /\s/.test(character);
+    };
     var standsAlone = content.length > 0
-        || (!/\w/.test(text.charAt(start - outsideBefore - 1))
-            && !/\w/.test(text.charAt(end + outsideAfter)));
+        || (bounded(text.charAt(start - outsideBefore - 1))
+            && bounded(text.charAt(end + outsideAfter)));
     if (left === right && holds(left) && standsAlone && !spansRuns(content)) {
         var keep = Array(left - size + 1).join(mark);
         var rangeStart = start - outsideBefore;
