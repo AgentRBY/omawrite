@@ -11,7 +11,8 @@ public:
     explicit MarkdownHighlighter(QTextDocument *document);
 
     void setDarkMode(bool darkMode);
-    void setColors(const QString &background, const QString &foreground, const QString &accent);
+    void setColors(const QString &background, const QString &foreground, const QString &accent,
+                   const QString &codeBackground);
     void setSearch(const QString &query, int currentMatchStart);
     void refreshFont();
 
@@ -22,16 +23,29 @@ public:
 
     enum class InlineKind { Bold, Italic, Strikethrough, Link };
 
+    // Carried from block to block so a fenced run of code knows it is inside
+    // one. Stored on the block, which is where Backend::hiddenRangesAt reads it.
+    // Inside a fence the state is InsideFence plus however many backticks past
+    // three opened it, since only a fence at least that long closes it.
+    enum BlockState { Prose = 0, InsideFence = 1 };
+
     struct InlineMarkup {
         InlineKind kind;
         Span content;
         Span markers[2];
+        Span destination{};
     };
 
     // Single source of truth for inline markdown spans: the highlighter uses it
     // to style content and hide markers, and the editor uses it (via
     // Backend::hiddenRangesAt) to skip the caret over the hidden markers.
     static QList<InlineMarkup> inlineMarkup(const QString &text);
+    static QString linkUrlAt(const QString &text, int position);
+
+    // Inline code spans, backticks included.
+    static QList<Span> codeSpans(const QString &text);
+    static int openingFenceLength(const QString &text);
+    static bool closesFence(const QString &text, int openingLength);
 
 protected:
     void highlightBlock(const QString &text) override;
@@ -46,13 +60,14 @@ private:
     QString m_customBackground;
     QString m_customForeground;
     QString m_customAccent;
+    QString m_customCodeBackground;
     QTextCharFormat m_markerFormat;
     QTextCharFormat m_hiddenMarkerFormat;
     QTextCharFormat m_headingFormat;
     QTextCharFormat m_boldFormat;
     QTextCharFormat m_italicFormat;
-    QTextCharFormat m_strikethroughFormat;
     QTextCharFormat m_codeFormat;
+    QTextCharFormat m_fenceFormat;
     QTextCharFormat m_quoteFormat;
     QTextCharFormat m_linkFormat;
     QString m_searchQuery;

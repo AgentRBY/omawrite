@@ -4,118 +4,6 @@ function normalizePlainText(text) {
     return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function toggleWrap(editor, before, after) {
-    var start = Math.min(editor.selectionStart, editor.selectionEnd);
-    var end = Math.max(editor.selectionStart, editor.selectionEnd);
-    var text = editor.text;
-    var selected = text.slice(start, end);
-    var mark = before.charAt(0);
-    var size = before.length;
-
-    // "*" is also half of "**", so measure the whole run of marker characters.
-    // A run holds this emphasis when it is exactly the marker, or, for
-    // asterisks, three of them: "***" is bold and italic at once.
-    var holds = function(run) {
-        return run === size || (mark === "*" && run === 3);
-    };
-    var runBefore = function(position) {
-        var i = position;
-        while (i > 0 && text.charAt(i - 1) === mark)
-            --i;
-        return position - i;
-    };
-    var runAfter = function(position) {
-        var i = position;
-        while (i < text.length && text.charAt(i) === mark)
-            ++i;
-        return i - position;
-    };
-    // Markers of this emphasis inside the text mean the selection may span
-    // separate runs, as in "**a** and **b**", where stripping the outer pair
-    // would leave the inner ones unmatched. Telling that apart from a wrapper
-    // around nested emphasis needs Markdown's full delimiter rules, so wrap
-    // instead: an extra pair is one undo away, a broken pair is not.
-    // Other emphasis nested inside, like the bold in "*a **b** c*", is fine.
-    var spansRuns = function(inner) {
-        var i = 0;
-        while (i < inner.length) {
-            if (inner.charAt(i) !== mark) {
-                ++i;
-                continue;
-            }
-            var runStart = i;
-            while (i < inner.length && inner.charAt(i) === mark)
-                ++i;
-            if (holds(i - runStart))
-                return true;
-        }
-        return false;
-    };
-
-    // The run on each side counts the markers inside the selection and those
-    // just outside it, so the toggle undoes itself whether or not the markers
-    // were selected: Ctrl+B twice on "*word*" leaves "*word*".
-    var leading = 0;
-    while (leading < selected.length && selected.charAt(leading) === mark)
-        ++leading;
-    var trailing = 0;
-    while (trailing < selected.length - leading
-           && selected.charAt(selected.length - 1 - trailing) === mark)
-        ++trailing;
-    var outsideBefore = runBefore(start);
-    var outsideAfter = runAfter(end);
-    var left = outsideBefore + leading;
-    var right = outsideAfter + trailing;
-    var content = selected.slice(leading, selected.length - trailing);
-    // With nothing between them, the two sides may just be halves of one
-    // longer delimiter, like the caret inside the "**" of "**word**". Only an
-    // empty pair with space or the line's end on both sides is ours to remove.
-    var bounded = function(character) {
-        return character === "" || /\s/.test(character);
-    };
-    var standsAlone = content.length > 0
-        || (bounded(text.charAt(start - outsideBefore - 1))
-            && bounded(text.charAt(end + outsideAfter)));
-    // Markdown's flanking rules decide whether a run can open or close:
-    // markers beside space are literal, as in "2 * 3 * 4", and the "**"
-    // between "a" and "," in "**a**,**b**" can only close the first span,
-    // never open one around the comma.
-    var space = function(character) {
-        return character === "" || /\s/.test(character);
-    };
-    var punctuation = function(character) {
-        return /[!-\/:-@\[-`{-~]/.test(character);
-    };
-    var opener = start - outsideBefore;
-    var closer = end + outsideAfter;
-    var outerBefore = text.charAt(opener - 1);
-    var first = text.charAt(start + leading);
-    var last = text.charAt(end - trailing - 1);
-    var beyond = text.charAt(closer);
-    var hugsContent = content.length === 0
-        || (!space(first) && (!punctuation(first) || space(outerBefore) || punctuation(outerBefore))
-            && !space(last) && (!punctuation(last) || space(beyond) || punctuation(beyond)));
-    // A backslash before either run makes it literal text.
-    var escapedAt = function(position) {
-        var backslashes = 0;
-        for (var b = position - 1; b >= 0 && text.charAt(b) === "\\"; --b)
-            ++backslashes;
-        return backslashes % 2 === 1;
-    };
-    var escaped = escapedAt(start - outsideBefore) || escapedAt(end - trailing);
-    if (left === right && holds(left) && standsAlone && hugsContent && !escaped
-            && !spansRuns(content)) {
-        var keep = Array(left - size + 1).join(mark);
-        var rangeStart = start - outsideBefore;
-        replaceRange(editor, rangeStart, end + outsideAfter, keep + content + keep,
-                     keep.length, keep.length + content.length);
-        return;
-    }
-
-    replaceRange(editor, start, end, before + selected + after,
-                 before.length, before.length + selected.length);
-}
-
 function replaceRange(editor, rangeStart, rangeEnd, replacement,
                       selectionStartOffset, selectionEndOffset) {
     var start = Math.max(0, Math.min(editor.text.length, rangeStart));
@@ -144,4 +32,43 @@ function replaceRange(editor, rangeStart, rangeEnd, replacement,
     }
 
     return insertedText;
+}
+
+// Unwraps when the marker is already there, selected or just outside the
+// selection, and wraps otherwise. A marker only counts as a whole run, so the
+// "*" of "**bold**" is not taken for italic; "***" counts as both.
+function toggleWrap(editor, marker) {
+    var start = Math.min(editor.selectionStart, editor.selectionEnd);
+    var end = Math.max(editor.selectionStart, editor.selectionEnd);
+    var text = editor.text;
+    var size = marker.length;
+    var mark = marker.charAt(0);
+    var runFrom = function(position, step, limit) {
+        var run = 0;
+        while (position + run * step !== limit && text.charAt(position + run * step) === mark)
+            ++run;
+        return run;
+    };
+    var holds = function(run) {
+        return run === size || (mark === "*" && run === 3);
+    };
+    var hasMarker = function(part) {
+        var runs = part.match(new RegExp("\\" + mark + "+", "g")) || [];
+        return runs.some(function(run) { return holds(run.length); });
+    };
+    var selected = text.slice(start, end);
+    var inner = selected.slice(size, selected.length - size);
+
+    // A marker in the middle means separate spans, as in "**a** and **b**":
+    // unwrapping would break them, so wrap instead.
+    if (holds(runFrom(start - 1, -1, -1)) && holds(runFrom(end, 1, text.length))
+            && !hasMarker(selected)) {
+        replaceRange(editor, start - size, end + size, selected, 0, selected.length);
+    } else if (selected.length >= 2 * size && holds(runFrom(start, 1, end))
+               && holds(runFrom(end - 1, -1, start - 1)) && !hasMarker(inner)) {
+        replaceRange(editor, start, end, inner, 0, inner.length);
+    } else {
+        replaceRange(editor, start, end, marker + selected + marker,
+                     size, size + selected.length);
+    }
 }
