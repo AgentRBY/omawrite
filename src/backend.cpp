@@ -595,16 +595,28 @@ QVariantMap Backend::emphasisSpanAt(int position, const QString &marker) const {
         : marker == QStringLiteral("~~")              ? Kind::Strikethrough
                                                       : Kind::Italic;
     const int offset = position - block.position();
-    for (const auto &item : MarkdownHighlighter::inlineMarkup(block.text())) {
+    const QList<MarkdownHighlighter::InlineMarkup> markup =
+        MarkdownHighlighter::inlineMarkup(block.text());
+    for (const auto &item : markup) {
         const int start = item.markers[0].start;
         const int end = item.markers[1].start + item.markers[1].length;
         if (item.kind != kind || offset < start || offset > end)
             continue;
+        // The visible text ends before any nested emphasis closing with it,
+        // as the italic "*" inside "***word***".
+        const int contentEnd = item.content.start + item.content.length;
+        int textEnd = contentEnd;
+        for (const auto &nested : markup) {
+            const auto &closing = nested.markers[1];
+            if (closing.start >= item.content.start && closing.start + closing.length == contentEnd)
+                textEnd = qMin(textEnd, closing.start);
+        }
         const int base = block.position();
         return {{QStringLiteral("start"), base + start},
                 {QStringLiteral("end"), base + end},
                 {QStringLiteral("contentStart"), base + item.content.start},
-                {QStringLiteral("contentEnd"), base + item.content.start + item.content.length}};
+                {QStringLiteral("contentEnd"), base + contentEnd},
+                {QStringLiteral("textEnd"), base + textEnd}};
     }
     return {};
 }

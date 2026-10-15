@@ -45,9 +45,8 @@ function toggleWrap(editor, marker, span) {
     var end = editor.selectionEnd;
     if (start === end && span && span.start !== undefined) {
         if (start === span.end) {
-            editor.cursorPosition = span.contentEnd;
-        } else if (/^[*_~]*$/.test(editor.text.slice(start, span.contentEnd))) {
-            // Only closing markers (perhaps of nested emphasis) lie ahead.
+            editor.cursorPosition = span.textEnd;
+        } else if (start >= span.textEnd) {
             editor.cursorPosition = span.end;
         } else {
             var content = editor.text.slice(span.contentStart, span.contentEnd);

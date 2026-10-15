@@ -549,6 +549,12 @@ private slots:
         QCOMPARE(text(), QStringLiteral("***hello***"));
         QCOMPARE(editor->property("cursorPosition").toInt(), 11);
 
+        // A literal underscore at the end is text, not a closing marker.
+        editor->setProperty("text", QStringLiteral("**value_**"));
+        editor->setProperty("cursorPosition", 7);
+        bold();
+        QCOMPARE(text(), QStringLiteral("value_"));
+
         // Italic works the same way.
         editor->setProperty("text", QStringLiteral("a "));
         editor->setProperty("cursorPosition", 2);
