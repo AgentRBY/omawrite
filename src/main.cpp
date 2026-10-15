@@ -43,8 +43,8 @@ int main(int argc, char *argv[]) {
     QObject::connect(&systemTheme, &SystemTheme::darkModeChanged, &backend,
                      &Backend::setDarkMode);
 
-    // Carry the desktop's text scale into the default font, so the chrome that
-    // inherits it (dialog titles, buttons) grows along with the writing area.
+    // Carry the text scale into the default font, so the chrome that inherits
+    // it (dialog titles, buttons) grows along with the writing area.
     const QFont interfaceFont(QStringLiteral("IBM Plex Mono"));
     const qreal basePointSize = interfaceFont.pointSizeF() > 0
         ? interfaceFont.pointSizeF()
@@ -54,13 +54,16 @@ int main(int argc, char *argv[]) {
         scaled.setPointSizeF(basePointSize * textScale);
         app.setFont(scaled);
     };
-    applyInterfaceFont(systemTheme.textScale());
 
-    backend.setTextScale(systemTheme.textScale());
+    // The desktop sets the baseline; the backend folds the user's own text
+    // size into it and reports the total.
+    backend.setDesktopTextScale(systemTheme.textScale());
+    applyInterfaceFont(backend.textScale());
     QObject::connect(&systemTheme, &SystemTheme::textScaleChanged, &backend,
-                     [&backend, applyInterfaceFont](qreal textScale) {
-        applyInterfaceFont(textScale);
-        backend.setTextScale(textScale);
+                     &Backend::setDesktopTextScale);
+    QObject::connect(&backend, &Backend::textScaleChanged, &app,
+                     [&backend, applyInterfaceFont]() {
+        applyInterfaceFont(backend.textScale());
     });
 
     QQmlApplicationEngine engine;
