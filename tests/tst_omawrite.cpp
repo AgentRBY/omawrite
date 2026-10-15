@@ -2814,6 +2814,11 @@ private slots:
         writeFile(path, "theirs");
         QTRY_COMPARE(externalChangeSpy.count(), 2);
         QCOMPARE(externalChangeSpy.last().at(0).toBool(), false);
+
+        // And removed again before the writer answers.
+        QVERIFY(QFile::remove(path));
+        QTRY_COMPARE(externalChangeSpy.count(), 3);
+        QCOMPARE(externalChangeSpy.last().at(0).toBool(), true);
     }
 
     void hidesReloadWhileTheFileIsRemoved() {

@@ -1051,6 +1051,7 @@ void Backend::watchCurrentFile() {
     if (!m_fileUrl.isLocalFile())
         return;
     const QFileInfo info(m_fileUrl.toLocalFile());
+    m_fileMissing = !info.exists();
     if (info.exists())
         m_fileWatcher.addPath(info.filePath());
     else if (info.dir().exists())
@@ -1060,15 +1061,16 @@ void Backend::watchCurrentFile() {
 void Backend::checkWatchedFile() {
     // Atomic saves replace the watched inode, which drops it from the
     // watcher, so re-arm it either way. Our own save is not an outside edit.
+    const bool wasMissing = m_fileMissing;
     watchCurrentFile();
     if (diskMatchesKnownContents())
         return;
-    // A file that is still missing has already been reported, or was never
-    // there. One that turns up again is an outside edit like any other, even
-    // while the writer is still looking at the removal.
-    const bool exists = QFileInfo::exists(m_fileUrl.toLocalFile());
-    if (exists || m_hasKnownFileContents)
-        reportExternalChange(!exists);
+    // A file that was already missing has been reported, or was never there.
+    // One that turns up again is an outside edit like any other, even while
+    // the writer is still looking at the removal.
+    if (m_fileMissing && wasMissing)
+        return;
+    reportExternalChange(m_fileMissing);
 }
 
 // A quoted TOML value ends at its closing quote; whatever trails it is an inline comment.
