@@ -97,8 +97,11 @@ Dialog {
 
             SquareDialogButton {
                 id: reloadButton
+                objectName: "reloadButton"
                 text: "Reload"
-                enabled: !root.deleted
+                // There is nothing to reload from a removed file. Should it
+                // come back, the dialog turns into a change and this returns.
+                visible: !root.deleted
                 primary: true
                 darkMode: root.darkMode
                 textScale: root.textScale
