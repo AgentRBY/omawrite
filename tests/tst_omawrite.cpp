@@ -213,6 +213,15 @@ private slots:
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() / 2),
                  QStringLiteral("https://example.com"));
         QCOMPARE(urlUnder(only.x() + 1, only.y() + only.height() * 3), QString());
+
+        // Deleting the link under a resting pointer takes its URL away too.
+        QMetaObject::invokeMethod(editor, "updateLinkHover",
+                                  Q_ARG(QVariant, only.x() + 1),
+                                  Q_ARG(QVariant, only.y() + only.height() / 2));
+        QCOMPARE(editor->property("hoveredLinkUrl").toString(),
+                 QStringLiteral("https://example.com"));
+        editor->setProperty("text", QString());
+        QTRY_COMPARE(editor->property("hoveredLinkUrl").toString(), QString());
     }
 
     void showsLinkTooltipUrlAsPlainText() {

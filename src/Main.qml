@@ -855,6 +855,10 @@ ApplicationWindow {
                 }
 
                 onTextChanged: {
+                    // An edit under a resting pointer can remove or change the
+                    // link it was showing.
+                    if (hoveredLinkUrl.length > 0)
+                        Qt.callLater(refreshLinkHover);
                     if (win.searchUpdating)
                         return;
                     var contentChanged = backend.editorTextChanged();
