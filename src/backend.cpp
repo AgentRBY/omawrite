@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
+#include <QFontDatabase>
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QMimeData>
@@ -14,6 +16,7 @@
 #include <QPrinter>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QJsonDocument>
@@ -24,6 +27,7 @@
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextLayout>
 #include <QTextStream>
 #include <QUrl>
 #include <QVariantMap>
@@ -35,6 +39,25 @@
 
 constexpr qreal typoraLineHeightPercent = 140;
 const QString lastSaveDirectorySetting = QStringLiteral("file/lastSaveDirectory");
+const QString editorFontSetting = QStringLiteral("editor/font");
+
+// Noto ships a separate family per script, which buries every other font in
+// the picker. Offer only the core Latin families; the rest still serve as
+// fallbacks for whatever scripts a document contains.
+const QStringList keptNotoFamilies = {QStringLiteral("Noto Sans"),
+                                      QStringLiteral("Noto Sans Mono"),
+                                      QStringLiteral("Noto Serif")};
+
+// Fontconfig's generic aliases just point at another listed family.
+const QStringList genericFontAliases = {QStringLiteral("Monospace"), QStringLiteral("Mono"),
+                                        QStringLiteral("Sans Serif"), QStringLiteral("Sans"),
+                                        QStringLiteral("Serif"), QStringLiteral("System-ui")};
+
+// Symbol fonts often claim Latin coverage because they map their glyphs onto
+// ASCII, so they can only be told apart by name. D050000L is URW's Dingbats.
+const QRegularExpression symbolFontName(
+    QStringLiteral("symbol|dingbat|emoji|icon|awesome|^D050000L$"),
+    QRegularExpression::CaseInsensitiveOption);
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
     QString candidate = clipboardText.trimmed();
@@ -72,6 +95,11 @@ QString Backend::normalizedLinkUrl(const QString &clipboardText) {
 }
 
 Backend::Backend(QObject *parent) : QObject(parent) {
+    const QString savedFont = QSettings().value(editorFontSetting).toString();
+    m_editorFont = !savedFont.isEmpty() && QFontDatabase::hasFamily(savedFont)
+        ? savedFont
+        : defaultEditorFont();
+
     const QString stateDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(stateDirectory);
     // Claim an orphaned snapshot before taking an empty slot. This ensures a
@@ -97,6 +125,9 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     m_recoveryTimer.setSingleShot(true);
     m_recoveryTimer.setInterval(750);
     connect(&m_recoveryTimer, &QTimer::timeout, this, &Backend::writeRecovery);
+    m_autoSaveTimer.setSingleShot(true);
+    m_autoSaveTimer.setInterval(500);
+    connect(&m_autoSaveTimer, &QTimer::timeout, this, &Backend::autoSave);
     connect(&m_fileWatcher, &QFileSystemWatcher::fileChanged, this,
             [this](const QString &path) {
                 if (path != m_fileUrl.toLocalFile())
@@ -105,7 +136,7 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                 const bool deleted = !QFileInfo::exists(path);
                 if (!deleted && m_hasKnownFileContents) {
                     QFile file(path);
-                    if (file.open(QIODevice::ReadOnly)
+                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)
                             && file.readAll() == m_lastKnownFileContents) {
                         // Atomic saves can replace the watched inode. Re-arm the
                         // watcher, but do not report our own save as an outside edit.
@@ -114,6 +145,11 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                     }
                 }
 
+                // Whatever is on disk now, it is not what we last read, so the
+                // baseline is unknown until the writer picks a version. A
+                // deletion counts: the old text is not saved anywhere either.
+                setKnownFileContents(QByteArray(), false);
+                suspendAutoSave();
                 emit externalChangeDetected(deleted, m_modified);
             });
 
@@ -199,10 +235,6 @@ void Backend::openDialog() {
 }
 
 void Backend::open(const QUrl &url) {
-    openPath(url, true);
-}
-
-void Backend::openPath(const QUrl &url, bool mayStartNewFile) {
     if (!url.isLocalFile()) {
         setStatus(QStringLiteral("Only local files can be opened."));
         return;
@@ -210,37 +242,7 @@ void Backend::openPath(const QUrl &url, bool mayStartNewFile) {
 
     const QString targetName = QFileInfo(url.toLocalFile()).fileName();
     QFile file(url.toLocalFile());
-    // A path that is not there yet is a file the writer means to start, so
-    // take the name for a blank document. The first save then lands where
-    // they said it should, instead of asking them again.
-    if (mayStartNewFile && !file.exists()) {
-        // Only where it could be written: a name under a directory that is not
-        // there leaves the first save with nowhere to land and no dialog.
-        const QFileInfo parentDirectory(QFileInfo(url.toLocalFile()).absolutePath());
-        if (!parentDirectory.isDir() || !parentDirectory.isWritable()) {
-            setStatus(QStringLiteral("Could not open %1.").arg(targetName));
-            return;
-        }
-
-        loadDocumentText(QString());
-        clearRecovery();
-        m_lastKnownFileContents.clear();
-        m_hasKnownFileContents = false;
-        m_pathNeverRead = true;
-        setFileUrl(url);
-        setModified(false);
-        setStatus(QStringLiteral("New file %1").arg(fileName()));
-        return;
-    }
-
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        // A reload with nothing left to read leaves this document holding a
-        // name and no file, and the watcher let the path go when it went.
-        // That is the state a new file starts in, so say so: if the file
-        // comes back, the next save asks rather than replacing it unseen.
-        if (!mayStartNewFile && !file.exists())
-            m_pathNeverRead = true;
-
         setStatus(QStringLiteral("Could not open %1.").arg(targetName));
         return;
     }
@@ -248,9 +250,8 @@ void Backend::openPath(const QUrl &url, bool mayStartNewFile) {
     const QByteArray contents = file.readAll();
     loadDocumentText(QString::fromUtf8(contents));
     clearRecovery();
-    m_lastKnownFileContents = contents;
-    m_hasKnownFileContents = true;
-    m_pathNeverRead = false;
+    setKnownFileContents(contents, true);
+    m_autoSaveSuspended = false;
     setFileUrl(url);
     watchCurrentFile();
     setModified(false);
@@ -260,20 +261,6 @@ void Backend::openPath(const QUrl &url, bool mayStartNewFile) {
 void Backend::save() {
     if (!m_fileUrl.isValid() || m_fileUrl.isEmpty()) {
         saveAsDialog();
-        return;
-    }
-
-    // Nothing can watch a file that is not there, so a name taken for a file
-    // that has yet to be written is unguarded until this save: a `git pull` or
-    // a sync client can put something on that path in the meantime and
-    // QSaveFile::commit() would replace it without a word. Ask once, and only
-    // once -- the flag is cleared by every answer the dialog can give, so a
-    // file that turns out to be unreadable cannot leave the writer trapped in
-    // a question they have already answered.
-    if (m_pathNeverRead && m_fileUrl.isLocalFile()
-            && QFileInfo::exists(m_fileUrl.toLocalFile())) {
-        m_closeAfterSave = false;
-        emit externalFileAppeared(m_modified);
         return;
     }
 
@@ -304,36 +291,45 @@ void Backend::fileDialogCanceled() {
 
 void Backend::discardRecovery() {
     clearRecovery();
+    // Discarded changes must never reach the file, even if the open or close
+    // that follows fails and leaves them in the editor. Opening a file or an
+    // explicit save lifts this.
+    suspendAutoSave();
 }
 
 void Backend::reloadFromDisk() {
-    // Reload is asked for a file we already have, so it must not go down the
-    // path that takes an absent name for a new document: if the file goes away
-    // between the "File changed" dialog opening and the click, blanking the
-    // editor and clearing recovery would throw away the only copy left. Say
-    // it could not be opened and leave the text where it is.
     if (m_fileUrl.isLocalFile())
-        openPath(m_fileUrl, false);
+        open(m_fileUrl);
 }
 
 void Backend::keepExternalVersion() {
     QFile file(m_fileUrl.toLocalFile());
-    if (file.open(QIODevice::ReadOnly)) {
-        m_lastKnownFileContents = file.readAll();
-        m_hasKnownFileContents = true;
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setKnownFileContents(file.readAll(), true);
+        // Keeping our text over an edited file is a deliberate choice to
+        // overwrite it, so auto-save may resume. A removed file stays removed
+        // until the writer saves it again.
+        m_autoSaveSuspended = false;
     } else {
-        m_lastKnownFileContents.clear();
-        m_hasKnownFileContents = false;
+        setKnownFileContents(QByteArray(), false);
     }
-    // Answered, whether or not the file could be read. Failing to read it is
-    // not a reason to ask again: the writer said to keep their version, and
-    // the next save must be allowed to try, so the filesystem gets to give
-    // the answer instead of the dialog asking the same question forever.
-    m_pathNeverRead = false;
     setModified(true);
     scheduleRecovery();
+    scheduleAutoSave();
     watchCurrentFile();
     setStatus(QStringLiteral("Kept your version"));
+}
+
+QFont Backend::printFont(const QFont &editorFont, qreal screenDpi) {
+    // The editor sizes its font in pixels, which a printer takes as device dots.
+    // Convert to points at the screen's DPI so the page matches the editor.
+    QFont font = editorFont;
+    if (font.pixelSize() <= 0)
+        return font;
+
+    const qreal dpi = screenDpi > 0.0 ? screenDpi : 96.0;
+    font.setPointSizeF(font.pixelSize() * 72.0 / dpi);
+    return font;
 }
 
 void Backend::printDocument() {
@@ -351,7 +347,10 @@ void Backend::printDocument() {
 
     if (dialog.exec() == QDialog::Accepted) {
         QTextDocument rendered;
-        rendered.setDefaultFont(m_document->defaultFont());
+        const QScreen *screen = m_parentWindow ? m_parentWindow->screen()
+                                               : QGuiApplication::primaryScreen();
+        rendered.setDefaultFont(printFont(m_document->defaultFont(),
+                                          screen ? screen->logicalDotsPerInchY() : 0.0));
         rendered.setMarkdown(currentDocumentText());
         rendered.print(&printer);
     }
@@ -362,6 +361,24 @@ void Backend::newWindow() {
                                                  QStringList());
     if (!started)
         setStatus(QStringLiteral("Could not open a new window."));
+}
+
+void Backend::copyAsHtml() {
+    QTextDocument rendered;
+    rendered.setMarkdown(currentDocumentText());
+
+    // Drop Qt's fixed fonts and margins from the body and blocks, so the pasted
+    // text takes on the destination's own typeface and paragraph spacing.
+    QString html = rendered.toHtml();
+    static const QRegularExpression blockStyle(
+        QStringLiteral("<(body|p|h[1-6]|ul|ol|li)\\s+style=\"[^\"]*\""));
+    html.replace(blockStyle, QStringLiteral("<\\1"));
+
+    auto *mimeData = new QMimeData;
+    mimeData->setHtml(html);
+    mimeData->setText(rendered.toPlainText());
+    QGuiApplication::clipboard()->setMimeData(mimeData);
+    setStatus(QStringLiteral("Copied as HTML."));
 }
 
 QString Backend::clipboardUrl() const {
@@ -414,9 +431,28 @@ bool Backend::editorTextChanged() {
     }
 
     scheduleWordCount();
-    setModified(true);
-    setStatus(QStringLiteral("Unsaved"));
-    scheduleRecovery();
+
+    const QString &baseline = m_lastKnownFileText;
+    // An empty baseline means a pristine untitled document, but only when there
+    // is no file behind it. Once there is one, an unknown baseline is unknown
+    // rather than empty, and emptying the editor is a change like any other.
+    const bool baselineKnown = m_hasKnownFileContents
+        || !m_fileUrl.isValid() || m_fileUrl.isEmpty();
+
+    if (baselineKnown && text == baseline) {
+        setModified(false);
+        clearRecovery();
+        if (m_hasKnownFileContents)
+            setStatus(QStringLiteral("Saved %1").arg(fileName()));
+        else
+            setStatus(QString());
+    } else {
+        setModified(true);
+        setStatus(QStringLiteral("Unsaved"));
+        scheduleRecovery();
+        scheduleAutoSave();
+    }
+
     return true;
 }
 
@@ -449,6 +485,54 @@ QVariantList Backend::hiddenRangesAt(int position) const {
     return ranges;
 }
 
+int Backend::cursorPositionStep(int position, int direction) const
+{
+    if (!m_document || direction == 0)
+        return position;
+
+    const int documentLength = m_document->characterCount() - 1;
+    position = qBound(0, position, documentLength);
+
+    if (direction > 0) {
+        if (position >= documentLength)
+            return documentLength;
+    } else if (position <= 0) {
+        return 0;
+    }
+
+    const QTextBlock block = m_document->findBlock(position);
+    if (!block.isValid())
+        return position;
+
+    const int blockStart = block.position();
+    const int blockTextLength = block.text().size();
+    // A block's text excludes its paragraph separator, so this is the last
+    // cursor position inside the block, just before the separator.
+    const int blockEnd = blockStart + blockTextLength;
+
+    if (direction > 0) {
+        // The separator is the next valid cursor position past a block; the
+        // layout only knows the block's own characters.
+        if (position >= blockEnd)
+            return position + 1;
+    } else if (position <= blockStart) {
+        return position - 1;
+    }
+
+    // A fresh layout over the block's own text is always in sync with the
+    // document, unlike the document's display layout, whose text() cannot be
+    // checked for staleness. Building lines is unnecessary for cursor
+    // stepping and dominates the cost, so the layout is left unformatted.
+    // QTextLayout steps by whole grapheme clusters, so surrogate pairs, skin
+    // tone modifiers and ZWJ sequences are crossed in a single move.
+    QTextLayout layout(block.text());
+    const int local = position - blockStart;
+    const int stepped = direction > 0
+        ? layout.nextCursorPosition(local, QTextLayout::SkipCharacters)
+        : layout.previousCursorPosition(local, QTextLayout::SkipCharacters);
+    return blockStart + qBound(0, stepped, blockTextLength);
+}
+
 void Backend::setSearchHighlight(const QString &query, int currentMatchStart) {
     if (m_highlighter)
         m_highlighter->setSearch(query, currentMatchStart);
@@ -479,6 +563,59 @@ void Backend::saveWindowGeometry(int x, int y, int width, int height, bool maxim
         settings.setValue(QStringLiteral("window/height"), height);
     }
     settings.setValue(QStringLiteral("window/maximized"), maximized);
+}
+
+QString Backend::defaultEditorFont() {
+    return QStringLiteral("IBM Plex Mono");
+}
+
+void Backend::setEditorFont(const QString &family) {
+    if (family.isEmpty() || family == m_editorFont)
+        return;
+
+    m_editorFont = family;
+    QSettings().setValue(editorFontSetting, family);
+    emit editorFontChanged();
+}
+
+QStringList Backend::availableFonts() const {
+    // Leave out icon, emoji, and other symbol fonts, along with anything that
+    // cannot set the Latin text the editor is written in.
+    QStringList families;
+    for (const QString &family : QFontDatabase::families(QFontDatabase::Latin)) {
+        if (QFontDatabase::isPrivateFamily(family)
+                || QFontDatabase::writingSystems(family).contains(QFontDatabase::Symbol))
+            continue;
+        families.append(family);
+    }
+    return selectableFontFamilies(families);
+}
+
+QStringList Backend::selectableFontFamilies(const QStringList &families) {
+    QStringList selectable;
+    static const QRegularExpression foundrySuffix(QStringLiteral("\\s*\\[[^\\]]*\\]$"));
+    for (QString family : families) {
+        // The same family from two foundries is listed as "Name [Foundry]".
+        family.remove(foundrySuffix);
+        if (family.startsWith(QStringLiteral("Noto ")) && !keptNotoFamilies.contains(family))
+            continue;
+        if (genericFontAliases.contains(family, Qt::CaseInsensitive)
+                || family.contains(symbolFontName))
+            continue;
+        if (family == defaultEditorFont() || selectable.contains(family, Qt::CaseInsensitive))
+            continue;
+        selectable.append(family);
+    }
+    std::sort(selectable.begin(), selectable.end(), [](const QString &a, const QString &b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    selectable.prepend(defaultEditorFont());
+    return selectable;
+}
+
+void Backend::documentFontChanged() {
+    if (m_highlighter)
+        m_highlighter->refreshFont();
 }
 
 void Backend::loadDocumentText(const QString &text) {
@@ -557,9 +694,9 @@ void Backend::saveTo(const QUrl &url) {
 
     const bool shouldClose = m_closeAfterSave;
     m_closeAfterSave = false;
-    m_lastKnownFileContents = contents;
-    m_hasKnownFileContents = true;
-    m_pathNeverRead = false;
+    setKnownFileContents(contents, true);
+    m_autoSaveSuspended = false;
+    m_autoSaveTimer.stop();
     setFileUrl(url);
     watchCurrentFile();
     QSettings().setValue(lastSaveDirectorySetting,
@@ -577,8 +714,70 @@ void Backend::scheduleRecovery() {
     m_recoveryTimer.start();
 }
 
+void Backend::scheduleAutoSave() {
+    // Only auto-save documents that already live on disk. Untitled drafts are
+    // left to manual save so auto-save never silently opens a file picker or
+    // creates a file the writer did not name; crash recovery still covers them.
+    if (m_fileUrl.isLocalFile() && !m_autoSaveSuspended && !m_autoSaveHeld)
+        m_autoSaveTimer.start();
+}
+
+void Backend::holdAutoSave(bool held) {
+    m_autoSaveHeld = held;
+    if (held)
+        m_autoSaveTimer.stop();
+    else if (m_modified)
+        scheduleAutoSave();
+}
+
+void Backend::autoSave() {
+    if (!m_modified || !m_fileUrl.isLocalFile() || m_autoSaveSuspended || m_autoSaveHeld)
+        return;
+
+    // Never write over a version we have not seen. The watcher normally
+    // catches outside edits first, but it can miss some (or fire late), so
+    // check the file itself right before replacing it.
+    QFile file(m_fileUrl.toLocalFile());
+    const bool exists = file.exists();
+    if (!m_hasKnownFileContents) {
+        // A removed file, or a recovered draft whose file was gone, waits for
+        // an explicit save rather than being silently recreated.
+        suspendAutoSave();
+        if (exists)
+            emit externalChangeDetected(false, m_modified);
+        return;
+    }
+    // Read as open() does, so CRLF files compare equal to what we loaded.
+    if (!exists || !file.open(QIODevice::ReadOnly | QIODevice::Text)
+            || file.readAll() != m_lastKnownFileContents) {
+        // As in the watcher: what we last read is no longer on disk, so it
+        // cannot count as saved until the writer picks a version.
+        setKnownFileContents(QByteArray(), false);
+        suspendAutoSave();
+        emit externalChangeDetected(!exists, m_modified);
+        return;
+    }
+    file.close();
+
+    saveTo(m_fileUrl);
+}
+
+void Backend::suspendAutoSave() {
+    // Held until the writer reloads, keeps their version, or saves explicitly.
+    m_autoSaveTimer.stop();
+    m_autoSaveSuspended = true;
+}
+
 QString Backend::recoveryPath() const {
     return m_recoveryPath;
+}
+
+void Backend::setKnownFileContents(const QByteArray &contents, bool known) {
+    m_lastKnownFileContents = contents;
+    m_hasKnownFileContents = known;
+    m_lastKnownFileText = known
+        ? QString::fromUtf8(contents).replace(QStringLiteral("\r\n"), QStringLiteral("\n"))
+        : QString();
 }
 
 void Backend::writeRecovery() {
@@ -592,7 +791,6 @@ void Backend::writeRecovery() {
     if (!file.open(QIODevice::WriteOnly))
         return;
     const QJsonObject recovery{{QStringLiteral("fileUrl"), m_fileUrl.toString()},
-                               {QStringLiteral("pathNeverRead"), m_pathNeverRead},
                                {QStringLiteral("text"), currentDocumentText()}};
     file.write(QJsonDocument(recovery).toJson(QJsonDocument::Compact));
     file.commit();
@@ -609,22 +807,16 @@ void Backend::restoreRecovery() {
     loadDocumentText(recovery.value(QStringLiteral("text")).toString());
     const QUrl recoveredUrl(recovery.value(QStringLiteral("fileUrl")).toString());
     QFile diskFile(recoveredUrl.toLocalFile());
-    if (recoveredUrl.isLocalFile() && diskFile.open(QIODevice::ReadOnly)) {
-        m_lastKnownFileContents = diskFile.readAll();
-        m_hasKnownFileContents = true;
-        // Reading it now says what is on the path, not that this document ever
-        // looked: the file can have arrived while Omawrite was gone. Only the
-        // snapshot knows, so a snapshot without the key predates the flag and
-        // names a path something was written to.
-        m_pathNeverRead = recovery.value(QStringLiteral("pathNeverRead")).toBool();
+    if (recoveredUrl.isLocalFile() && diskFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setKnownFileContents(diskFile.readAll(), true);
     } else {
-        m_lastKnownFileContents.clear();
-        m_hasKnownFileContents = false;
-        // A snapshot can name a file that was never written -- the crash came
-        // first. That is the same unverified path a new file starts on.
-        m_pathNeverRead = true;
+        setKnownFileContents(QByteArray(), false);
     }
     setFileUrl(recoveredUrl);
+    // The file may have moved on since this draft was written, and the draft
+    // alone cannot tell. Leave overwriting it to an explicit save.
+    m_autoSaveSuspended = recoveredUrl.isLocalFile();
+    watchCurrentFile();
     setModified(true);
     setStatus(QStringLiteral("Recovered unsaved changes"));
 }
@@ -642,15 +834,31 @@ void Backend::watchCurrentFile() {
         m_fileWatcher.addPath(m_fileUrl.toLocalFile());
 }
 
-void Backend::loadOmarchyTheme() {
-    m_themeBackground = m_darkMode ? QStringLiteral("#101010") : QStringLiteral("#ffffff");
-    m_themeForeground = m_darkMode ? QStringLiteral("#eeeeee") : QStringLiteral("#222324");
-    m_themeAccent = m_darkMode ? QStringLiteral("#5584aa") : QStringLiteral("#2077b2");
-    m_themeSelection = m_darkMode ? QStringLiteral("#186a9a") : QStringLiteral("#2077b2");
+// A quoted TOML value ends at its closing quote; whatever trails it is an inline comment.
+QString Backend::tomlValue(const QString &text) {
+    const QString value = text.trimmed();
+    if (value.isEmpty())
+        return value;
 
+    const QChar quote = value.front();
+    if (quote != QLatin1Char('"') && quote != QLatin1Char('\''))
+        return value;
+
+    const int close = value.indexOf(quote, 1);
+    return close < 0 ? value : value.mid(1, close - 1);
+}
+
+void Backend::loadOmarchyTheme() {
     const QString colorsPath = QDir::homePath()
         + QStringLiteral("/.local/state/omarchy/current/theme/colors.toml");
     QString themeMode;
+    QString background;
+    QString foreground;
+    QString accent;
+    QString selection;
+    QString selectionBackground;
+    QString selectionForeground;
+    QString brightForeground;
     QFile file(colorsPath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
@@ -664,52 +872,72 @@ void Backend::loadOmarchyTheme() {
                 continue;
 
             const QString key = line.left(equals).trimmed();
-            QString value = line.mid(equals + 1).trimmed();
-            if (value.size() >= 2
-                    && ((value.front() == QLatin1Char('"') && value.back() == QLatin1Char('"'))
-                        || (value.front() == QLatin1Char('\'') && value.back() == QLatin1Char('\''))))
-                value = value.mid(1, value.size() - 2);
+            const QString value = tomlValue(line.mid(equals + 1));
 
             if (key == QStringLiteral("mode"))
                 themeMode = value;
             else if (key == QStringLiteral("background"))
-                m_themeBackground = value;
+                background = value;
             else if (key == QStringLiteral("foreground"))
-                m_themeForeground = value;
+                foreground = value;
             else if (key == QStringLiteral("accent"))
-                m_themeAccent = value;
+                accent = value;
             else if (key == QStringLiteral("selection"))
-                m_themeSelection = value;
+                selection = value;
+            else if (key == QStringLiteral("selection_background"))
+                selectionBackground = value;
+            else if (key == QStringLiteral("selection_foreground"))
+                selectionForeground = value;
+            else if (key == QStringLiteral("bright_foreground"))
+                brightForeground = value;
         }
     }
 
-    bool themeModeKnown = false;
     bool themeIsDark = m_darkMode;
     if (themeMode == QStringLiteral("dark")) {
         themeIsDark = true;
-        themeModeKnown = true;
     } else if (themeMode == QStringLiteral("light")) {
         themeIsDark = false;
-        themeModeKnown = true;
     } else {
-        const QColor background(m_themeBackground);
-        if (background.isValid()) {
-            const double luminance = 0.299 * background.redF()
-                + 0.587 * background.greenF() + 0.114 * background.blueF();
+        const QColor parsedBackground(background);
+        if (parsedBackground.isValid()) {
+            const double luminance = 0.299 * parsedBackground.redF()
+                + 0.587 * parsedBackground.greenF() + 0.114 * parsedBackground.blueF();
             themeIsDark = luminance < 0.5;
-            themeModeKnown = true;
         }
     }
-    if (themeModeKnown && themeIsDark != m_darkMode) {
-        m_darkMode = themeIsDark;
-        emit darkModeChanged();
-    }
+    const bool darkModeFlipped = themeIsDark != m_darkMode;
+    m_darkMode = themeIsDark;
+
+    // The defaults follow the mode the theme resolved to, so a colour we cannot
+    // read costs that one colour rather than the contrast of the whole editor.
+    m_themeBackground = m_darkMode ? QStringLiteral("#101010") : QStringLiteral("#ffffff");
+    m_themeForeground = m_darkMode ? QStringLiteral("#eeeeee") : QStringLiteral("#222324");
+    m_themeAccent = m_darkMode ? QStringLiteral("#5584aa") : QStringLiteral("#2077b2");
+    m_themeSelection = m_darkMode ? QStringLiteral("#186a9a") : QStringLiteral("#2077b2");
+
+    // An unparseable colour reaches QML as black, so keep the default instead.
+    // Later calls win, so each fallback is applied before what it falls back from.
+    const auto applyColor = [](QString &target, const QString &value) {
+        if (QColor(value).isValid())
+            target = value;
+    };
+    applyColor(m_themeBackground, background);
+    applyColor(m_themeForeground, foreground);
+    applyColor(m_themeAccent, accent);
+    applyColor(m_themeSelection, selectionBackground);
+    applyColor(m_themeSelection, selection);
+    m_themeSelectionForeground = m_themeForeground;
+    applyColor(m_themeSelectionForeground, brightForeground);
+    applyColor(m_themeSelectionForeground, selectionForeground);
 
     if (m_highlighter) {
         m_highlighter->setDarkMode(m_darkMode);
         m_highlighter->setColors(m_themeBackground, m_themeForeground, m_themeAccent);
     }
 
+    if (darkModeFlipped)
+        emit darkModeChanged();
     emit themeColorsChanged();
 }
 
@@ -748,10 +976,27 @@ QString Backend::currentDocumentText() const {
 }
 
 int Backend::countWords(const QString &text) {
+    // Only letters and numbers: PCRE2 reads \p{Han} as Script_Extensions, which
+    // puts 。 、 「 and the CJK radicals in Han and would count each as a word.
+    static const QRegularExpression cjkRe(
+        QStringLiteral("(?=[\\p{L}\\p{N}])[\\p{Han}\\p{Hiragana}\\p{Katakana}]"));
     static const QRegularExpression wordRe(
         QStringLiteral("[\\p{L}\\p{N}]+(?:['-][\\p{L}\\p{N}]+)*"));
+
+    // Count unspaced Han and kana characters individually, then replace them
+    // so they remain boundaries between surrounding space-delimited words.
     int count = 0;
-    QRegularExpressionMatchIterator it = wordRe.globalMatch(text);
+
+    QRegularExpressionMatchIterator cjkIt = cjkRe.globalMatch(text);
+    while (cjkIt.hasNext()) {
+        cjkIt.next();
+        ++count;
+    }
+
+    QString nonCjkText = text;
+    nonCjkText.replace(cjkRe, QStringLiteral(" "));
+
+    QRegularExpressionMatchIterator it = wordRe.globalMatch(nonCjkText);
     while (it.hasNext()) {
         it.next();
         ++count;
