@@ -1302,6 +1302,70 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("undecided"));
     }
 
+    void startsANamedFileThatIsNotThereYet() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("new.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        QSignalSpy externalSpy(&backend, &Backend::externalChangeDetected);
+
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.fileName(), QStringLiteral("new.md"));
+        QCOMPARE(backend.status(), QStringLiteral("New file new.md"));
+        QVERIFY(!backend.modified());
+        QVERIFY(!QFileInfo::exists(path));
+
+        // Typing does not auto-save the file into existence.
+        editor->setProperty("text", QStringLiteral("first words"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+        QTest::qWait(800);
+        QVERIFY(!QFileInfo::exists(path));
+
+        // The first save lands on the name given, without asking for one.
+        QSignalSpy saveAsSpy(&backend, &Backend::saveDialogRequested);
+        backend.save();
+        QCOMPARE(saveAsSpy.count(), 0);
+        QCOMPARE(readFile(path), QByteArray("first words"));
+        QVERIFY(!backend.modified());
+
+        // From then on it is an ordinary file, auto-saved like any other.
+        editor->setProperty("text", QStringLiteral("more words"));
+        QVERIFY(backend.editorTextChanged());
+        QTRY_COMPARE(readFile(path), QByteArray("more words"));
+        QCOMPARE(externalSpy.count(), 0);
+    }
+
+    void refusesANewFileInAMissingFolder() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("missing/new.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.status(), QStringLiteral("Could not open new.md."));
+        QVERIFY(backend.fileName() != QStringLiteral("new.md"));
+    }
+
+    void opensAnExistingFileFromTheCommandLine() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("notes.md"));
+        writeFile(path, "already here");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("already here"));
+        QCOMPARE(backend.status(), QStringLiteral("Opened notes.md"));
+    }
+
     void keepsDiscardedChangesOutOfTheFile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
