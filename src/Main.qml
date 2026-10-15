@@ -718,6 +718,45 @@ ApplicationWindow {
                     replaceSelectionWith("\n\n");
                 }
 
+                // Tab nests the list items the caret or selection touches by
+                // the width of their own marker, which is where Markdown looks
+                // for a child item, and Shift+Tab takes that width back off.
+                // Anywhere else, code fences included, Tab is left alone.
+                function indentListItems(direction) {
+                    var start = text.lastIndexOf("\n", selectionStart - 1) + 1;
+                    var end = text.indexOf("\n", selectionEnd);
+                    if (end < 0)
+                        end = text.length;
+                    if (backend.insideFence(start))
+                        return false;
+
+                    var block = text.slice(start, end);
+                    var firstShift = 0;
+                    var isList = false;
+                    var nested = block.split("\n").map(function(line, i) {
+                        var item = line.match(/^[ \t]*((?:[-+*]|\d+[.)])[ \t]+)/);
+                        if (!item)
+                            return line;
+                        isList = true;
+                        var width = item[1].length;
+                        var moved = direction > 0
+                            ? " ".repeat(width) + line
+                            : line.replace(new RegExp("^(\t| {1," + width + "})"), "");
+                        if (i === 0)
+                            firstShift = moved.length - line.length;
+                        return moved;
+                    }).join("\n");
+                    if (!isList)
+                        return false;
+                    if (nested === block)
+                        return true;
+
+                    var from = Math.max(0, selectionStart - start + firstShift);
+                    var to = Math.max(from, selectionEnd - start + nested.length - block.length);
+                    EditorMutations.replaceRange(editor, start, end, nested, from, to);
+                    return true;
+                }
+
                 function escapeMarkdownLinkText(linkText) {
                     return linkText.replace(/\\/g, "\\\\")
                                    .replace(/\[/g, "\\[")
@@ -895,6 +934,11 @@ ApplicationWindow {
                                && event.key === Qt.Key_Left) {
                         moveCursorVisibly(-1);
                         event.accepted = true;
+                    } else if (!commandModifier
+                               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
+                        var outdent = event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier);
+                        if (indentListItems(outdent ? -1 : 1))
+                            event.accepted = true;
                     } else if (!commandModifier
                                && (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)) {
                         movePage(event.key === Qt.Key_PageDown ? 1 : -1,
