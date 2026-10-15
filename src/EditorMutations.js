@@ -14,11 +14,19 @@ function toggleWrap(editor, before, after) {
     var openChar = before.charAt(0);
     var closeChar = after.charAt(after.length - 1);
 
+    // Markers inside the text mean the selection spans several runs, as in
+    // "**a** and **b**". Stripping the outer pair would leave the inner ones
+    // unmatched, so wrap the whole selection instead.
+    var hasInnerMarkers = function(inner) {
+        return inner.indexOf(before) >= 0 || inner.indexOf(after) >= 0;
+    };
+
     // Selection includes the markers: strip them.
     if (selected.length >= before.length + after.length
             && selected.startsWith(before) && selected.endsWith(after)
             && selected.charAt(before.length) !== openChar
-            && selected.charAt(selected.length - after.length - 1) !== closeChar) {
+            && selected.charAt(selected.length - after.length - 1) !== closeChar
+            && !hasInnerMarkers(selected.slice(before.length, selected.length - after.length))) {
         var inner = selected.slice(before.length, selected.length - after.length);
         replaceRange(editor, start, end, inner, 0, inner.length);
         return;
@@ -29,7 +37,8 @@ function toggleWrap(editor, before, after) {
             && editor.text.slice(start - before.length, start) === before
             && editor.text.slice(end, end + after.length) === after
             && editor.text.charAt(start - before.length - 1) !== openChar
-            && editor.text.charAt(end + after.length) !== closeChar) {
+            && editor.text.charAt(end + after.length) !== closeChar
+            && !hasInnerMarkers(selected)) {
         replaceRange(editor, start - before.length, end + after.length, selected,
                      0, selected.length);
         return;

@@ -22,10 +22,21 @@ Install via the Omarchy Package Repository via the `omawrite` package. It's inst
 - `Ctrl+F` searches the document. Use `Enter` or `Ctrl+G` for the next match and `Shift+Enter` for the previous match.
 - `Ctrl+H` opens find and replace.
 - `Ctrl+B`, `Ctrl+I`, and `Ctrl+Shift+X` toggle bold, italic, and strikethrough Markdown. `Ctrl+K` inserts a link.
+- `Ctrl+Shift+C` copies the rendered document as HTML, with plain text as a fallback.
 - `Ctrl+?` shows the keyboard shortcut reference.
+- In the unsaved-changes dialog, `Alt+C`, `Alt+D`, and `Alt+S` choose Cancel,
+  Discard, and Save.
 
-Unsaved drafts are recovered after an abnormal exit. Omawrite also watches open files
-and warns before an external change can replace local work.
+Once a document has been saved to a file, edits are auto-saved to that file a
+moment after you stop typing, so `Ctrl+S` is rarely needed. Untitled drafts are
+never auto-saved — they wait for an explicit save so Omawrite never picks a file
+name for you. Unsaved drafts are recovered after an abnormal exit. Omawrite also
+watches open files and warns before an external change can replace local work;
+auto-save pauses until you reload, keep your version, or save. A recovered draft
+is never auto-saved over its file — save it to keep it.
+
+The font button in the footer picks the writing font from any installed text font,
+and Omawrite remembers the choice. IBM Plex Mono is the default.
 
 Text follows the desktop text size — `omarchy display text size`, or GNOME's
 `text-scaling-factor` — and re-flows without a restart. The default of 12px leaves
@@ -36,6 +47,5 @@ Omawrite at the size it is designed around; larger and smaller sizes scale from 
 - Qt 6: `qt6-base`, `qt6-declarative`, `qt6-quickcontrols2`
 - `xdg-desktop-portal` and a portal backend
 
-The iA Writer Mono font is bundled under the SIL Open Font License 1.1; see
-`fonts/OFL.txt`. The font is copyright Information Architects Inc. and based on
-IBM Plex, copyright IBM Corp.
+The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
+`fonts/OFL.txt`. The font is copyright IBM Corp.
