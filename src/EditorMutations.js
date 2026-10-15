@@ -76,9 +76,25 @@ function toggleWrap(editor, before, after) {
     var standsAlone = content.length > 0
         || (bounded(text.charAt(start - outsideBefore - 1))
             && bounded(text.charAt(end + outsideAfter)));
-    // Markers beside space are literal, as in "2 * 3 * 4", not emphasis.
+    // Markdown's flanking rules decide whether a run can open or close:
+    // markers beside space are literal, as in "2 * 3 * 4", and the "**"
+    // between "a" and "," in "**a**,**b**" can only close the first span,
+    // never open one around the comma.
+    var space = function(character) {
+        return character === "" || /\s/.test(character);
+    };
+    var punctuation = function(character) {
+        return /[!-\/:-@\[-`{-~]/.test(character);
+    };
+    var opener = start - outsideBefore;
+    var closer = end + outsideAfter;
+    var outerBefore = text.charAt(opener - 1);
+    var first = text.charAt(start + leading);
+    var last = text.charAt(end - trailing - 1);
+    var beyond = text.charAt(closer);
     var hugsContent = content.length === 0
-        || (!/\s/.test(content.charAt(0)) && !/\s/.test(content.charAt(content.length - 1)));
+        || (!space(first) && (!punctuation(first) || space(outerBefore) || punctuation(outerBefore))
+            && !space(last) && (!punctuation(last) || space(beyond) || punctuation(beyond)));
     // A backslash before either run makes it literal text.
     var escapedAt = function(position) {
         var backslashes = 0;

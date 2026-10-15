@@ -510,6 +510,7 @@ private slots:
                 property string literalAsterisks
                 property string escapedTildes
                 property string escapedClosingTildes
+                property string boldAroundCommaOnly
 
                 Component.onCompleted: {
                     text = "strike this";
@@ -608,6 +609,11 @@ private slots:
                     selectAll();
                     EditorMutations.toggleWrap(this, "~~", "~~");
                     escapedClosingTildes = text;
+
+                    text = "**a**,**b**";
+                    select(5, 6);
+                    EditorMutations.toggleWrap(this, "**", "**");
+                    boldAroundCommaOnly = text;
                 }
             }
         )QML";
@@ -651,6 +657,8 @@ private slots:
                  QStringLiteral("\\~~~~word~~~~"));
         QCOMPARE(editor->property("escapedClosingTildes").toString(),
                  QStringLiteral("~~~~word\\~~~~"));
+        QCOMPARE(editor->property("boldAroundCommaOnly").toString(),
+                 QStringLiteral("**a****,****b**"));
         QCOMPARE(editor->property("literalAsterisks").toString(),
                  QStringLiteral("2 ** 3 ** 4"));
         QVERIFY(editor->property("caretInsideAccentedBold").toString()
