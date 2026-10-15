@@ -29,9 +29,12 @@ ApplicationWindow {
     readonly property real textScale: backend.textScale
     readonly property int editorFontPixelSize: scaledSize(20)
     readonly property int footerHeight: scaledSize(32)
+    // Never wider than the Flickable's viewport, whatever the floor asks for:
+    // a tiling compositor can resize the window below its minimum width.
     readonly property int editorWidth: Math.min(
         Math.round(writerFontMetrics.averageCharacterWidth * 65),
-        Math.max(360, width - Math.round(writerFontMetrics.averageCharacterWidth * 20)))
+        Math.max(360, width - Math.round(writerFontMetrics.averageCharacterWidth * 20)),
+        Math.max(0, width - 48))
     property bool closeConfirmed: false
     property bool searchOpen: false
     property bool searchUpdating: false

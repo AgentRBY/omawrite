@@ -70,6 +70,7 @@ public:
     Q_INVOKABLE void attachDocument(QObject *textDocument);
     Q_INVOKABLE void openDialog();
     Q_INVOKABLE void open(const QUrl &url);
+    void openOrStartFile(const QUrl &url);
     Q_INVOKABLE void save();
     Q_INVOKABLE void saveForClose();
     Q_INVOKABLE void saveAsDialog();

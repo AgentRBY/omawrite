@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 #include <QClipboard>
 #include <QMimeData>
+#include "cli.h"
 
 #include "backend.h"
 #include "markdownhighlighter.h"
@@ -84,6 +85,31 @@ private slots:
         QCOMPARE(Backend::suggestedFileName(QString()), QStringLiteral("Untitled.md"));
         QCOMPARE(Backend::suggestedFileName(QStringLiteral("Already.md")),
                  QStringLiteral("Already.md"));
+    }
+
+    void answersHelpBeforeOpeningAWindow() {
+        const QString usage = Cli::usage();
+        QVERIFY(usage.contains(QStringLiteral("omawrite [FILE]")));
+        QVERIFY(usage.contains(QStringLiteral("-h, --help")));
+        QVERIFY(usage.contains(QStringLiteral("-v, --version")));
+
+        const QString version = QStringLiteral("1.2.3");
+        const auto answer = [&](const QStringList &arguments) {
+            return Cli::handleArguments(QStringList{QStringLiteral("omawrite")} + arguments,
+                                        version);
+        };
+        QCOMPARE(answer({QStringLiteral("--help")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("-h")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("--version")}), std::optional<int>(0));
+        QCOMPARE(answer({QStringLiteral("-v")}), std::optional<int>(0));
+
+        // Everything else is the app's: no arguments, a file, and Qt's own
+        // options, which a leading dash must not turn into an error.
+        QCOMPARE(answer({}), std::nullopt);
+        QCOMPARE(answer({QStringLiteral("draft.md")}), std::nullopt);
+        QCOMPARE(answer({QStringLiteral("-platform"), QStringLiteral("offscreen")}),
+                 std::nullopt);
+        QCOMPARE(answer({QStringLiteral("-notes.md")}), std::nullopt);
     }
 
     void printsInPointsNotPixels() {
@@ -630,9 +656,6 @@ private slots:
     }
 
     void flashesScrollBarOnlyWhenPaging() {
-    }
-
-    void breaksLinesOnReturn() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
 
@@ -643,7 +666,6 @@ private slots:
         QVERIFY2(component.isReady(), qPrintable(component.errorString()));
         QScopedPointer<QObject> object(component.create());
         QVERIFY2(object, qPrintable(component.errorString()));
-
         auto *window = qobject_cast<QQuickWindow *>(object.data());
         QVERIFY(window);
         window->show();
@@ -672,7 +694,26 @@ private slots:
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QVERIFY(linger->property("running").toBool());
         QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+    }
 
+    void breaksLinesOnReturn() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
         QVERIFY(editor);
         QMetaObject::invokeMethod(editor, "forceActiveFocus");
         QVERIFY(editor->property("activeFocus").toBool());
@@ -1078,6 +1119,40 @@ private slots:
         backend.resetTextSize();
     }
 
+    void keepsTextColumnInsideNarrowWindows() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QObject *viewport = editor->parent();
+        QVERIFY(viewport);
+
+        // A resize reaches the window through its platform window, so the
+        // bindings only see the new width once the events are delivered.
+        const int minimumWidth = window->property("minimumWidth").toInt();
+        window->setProperty("width", minimumWidth);
+        QCoreApplication::processEvents();
+        QCOMPARE(window->property("width").toInt(), minimumWidth);
+        QVERIFY(editor->property("x").toInt() > 0);
+
+        // A tiling compositor resizes below the minimum the window asks for.
+        window->setProperty("width", 394);
+        QCoreApplication::processEvents();
+        QCOMPARE(window->property("width").toInt(), 394);
+        QVERIFY(editor->property("width").toInt()
+                <= viewport->property("width").toInt());
+        QVERIFY(editor->property("x").toInt() >= 0);
+    }
+
     void shortcutsDialogHasNoBindingLoop() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -1319,6 +1394,70 @@ private slots:
         // Cancel lets auto-save carry on.
         backend.holdAutoSave(false);
         QTRY_COMPARE(readFile(path), QByteArray("undecided"));
+    }
+
+    void startsANamedFileThatIsNotThereYet() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("new.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        QSignalSpy externalSpy(&backend, &Backend::externalChangeDetected);
+
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.fileName(), QStringLiteral("new.md"));
+        QCOMPARE(backend.status(), QStringLiteral("New file new.md"));
+        QVERIFY(!backend.modified());
+        QVERIFY(!QFileInfo::exists(path));
+
+        // Typing does not auto-save the file into existence.
+        editor->setProperty("text", QStringLiteral("first words"));
+        QVERIFY(backend.editorTextChanged());
+        QVERIFY(backend.modified());
+        QTest::qWait(800);
+        QVERIFY(!QFileInfo::exists(path));
+
+        // The first save lands on the name given, without asking for one.
+        QSignalSpy saveAsSpy(&backend, &Backend::saveDialogRequested);
+        backend.save();
+        QCOMPARE(saveAsSpy.count(), 0);
+        QCOMPARE(readFile(path), QByteArray("first words"));
+        QVERIFY(!backend.modified());
+
+        // From then on it is an ordinary file, auto-saved like any other.
+        editor->setProperty("text", QStringLiteral("more words"));
+        QVERIFY(backend.editorTextChanged());
+        QTRY_COMPARE(readFile(path), QByteArray("more words"));
+        QCOMPARE(externalSpy.count(), 0);
+    }
+
+    void refusesANewFileInAMissingFolder() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("missing/new.md"));
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.status(), QStringLiteral("Could not open new.md."));
+        QVERIFY(backend.fileName() != QStringLiteral("new.md"));
+    }
+
+    void opensAnExistingFileFromTheCommandLine() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("notes.md"));
+        writeFile(path, "already here");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("already here"));
+        QCOMPARE(backend.status(), QStringLiteral("Opened notes.md"));
     }
 
     void keepsDiscardedChangesOutOfTheFile() {
