@@ -8,7 +8,6 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
-#include <QDesktopServices>
 #include <QGuiApplication>
 #include <QMimeData>
 #include <QProcess>
@@ -162,24 +161,12 @@ Backend::Backend(QObject *parent) : QObject(parent) {
                 if (path != m_fileUrl.toLocalFile())
                     return;
 
-                const bool deleted = !QFileInfo::exists(path);
-                if (!deleted && m_hasKnownFileContents) {
-                    QFile file(path);
-                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)
-                            && file.readAll() == m_lastKnownFileContents) {
-                        // Atomic saves can replace the watched inode. Re-arm the
-                        // watcher, but do not report our own save as an outside edit.
-                        watchCurrentFile();
-                        return;
-                    }
-                }
-
-                // Whatever is on disk now, it is not what we last read, so the
-                // baseline is unknown until the writer picks a version. A
-                // deletion counts: the old text is not saved anywhere either.
-                setKnownFileContents(QByteArray(), false);
-                suspendAutoSave();
-                emit externalChangeDetected(deleted, m_modified);
+                // Atomic saves replace the watched inode, which drops it from
+                // the watcher, so re-arm it either way. Our own save is not an
+                // outside edit.
+                watchCurrentFile();
+                if (!diskMatchesKnownContents())
+                    reportExternalChange(!QFileInfo::exists(path));
             });
 
     loadOmarchyTheme();
@@ -308,11 +295,16 @@ void Backend::open(const QUrl &url) {
 
     const QString targetName = QFileInfo(url.toLocalFile()).fileName();
     QFile file(url.toLocalFile());
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadOnly)) {
         setStatus(QStringLiteral("Could not open %1.").arg(targetName));
         return;
     }
 
+    const QByteArray raw = file.readAll();
+    // Text mode drops carriage returns, matching how the file is compared
+    // and saved later.
+    file.setTextModeEnabled(true);
+    file.seek(0);
     const QByteArray contents = file.readAll();
     loadDocumentText(QString::fromUtf8(contents));
     clearRecovery();
@@ -321,7 +313,15 @@ void Backend::open(const QUrl &url) {
     setFileUrl(url);
     watchCurrentFile();
     setModified(false);
-    setStatus(QStringLiteral("Opened %1").arg(fileName()));
+    if (savesUnchanged(raw)) {
+        setStatus(QStringLiteral("Opened %1").arg(fileName()));
+    } else {
+        // Saving writes UTF-8 with plain line endings, which would change
+        // bytes this file holds. Leave that to an explicit save.
+        suspendAutoSave();
+        setStatus(QStringLiteral("Opened %1. Auto-save is off to keep its encoding and line endings.")
+                      .arg(fileName()));
+    }
 }
 
 void Backend::save() {
@@ -333,26 +333,12 @@ void Backend::save() {
     saveTo(m_fileUrl);
 }
 
-void Backend::saveForClose() {
-    if (!m_modified) {
-        emit closeAfterSave();
-        return;
-    }
-
-    m_closeAfterSave = true;
-    save();
-}
-
 void Backend::saveAsDialog() {
     emit saveDialogRequested(suggestedSaveUrl());
 }
 
 void Backend::saveAs(const QUrl &url) {
     saveTo(url);
-}
-
-void Backend::fileDialogCanceled() {
-    m_closeAfterSave = false;
 }
 
 void Backend::discardRecovery() {
@@ -366,8 +352,18 @@ void Backend::discardRecovery() {
 // A file named on the command line need not exist yet: `omawrite new.md`
 // starts a blank document that the first save writes to that path. Opening
 // from the file picker or reloading still requires the file to be there.
-void Backend::openOrStartFile(const QUrl &url) {
-    const QFileInfo info(url.toLocalFile());
+void Backend::openOrStartFile(const QUrl &requestedUrl) {
+    // A relative path names a file in the directory Omawrite was started
+    // from; a recovery draft must not resolve it against another one later.
+    const QFileInfo info(requestedUrl.toLocalFile());
+    const QUrl url = requestedUrl.isLocalFile()
+        ? QUrl::fromLocalFile(info.absoluteFilePath()) : requestedUrl;
+    if (m_modified) {
+        // A recovered draft fills this window; opening over it would lose it.
+        setStatus(QStringLiteral("Recovered unsaved changes; %1 was not opened.")
+                      .arg(info.fileName()));
+        return;
+    }
     if (!url.isLocalFile() || info.exists() || !info.absoluteDir().exists()) {
         open(url);
         return;
@@ -379,6 +375,7 @@ void Backend::openOrStartFile(const QUrl &url) {
     // off until an explicit save creates the file (see autoSave()).
     setKnownFileContents(QByteArray(), false);
     setFileUrl(url);
+    watchCurrentFile();
     setModified(false);
     setStatus(QStringLiteral("New file %1").arg(fileName()));
 }
@@ -390,12 +387,16 @@ void Backend::reloadFromDisk() {
 
 void Backend::keepExternalVersion() {
     QFile file(m_fileUrl.toLocalFile());
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (file.open(QIODevice::ReadOnly)) {
+        const QByteArray raw = file.readAll();
+        file.setTextModeEnabled(true);
+        file.seek(0);
         setKnownFileContents(file.readAll(), true);
         // Keeping our text over an edited file is a deliberate choice to
-        // overwrite it, so auto-save may resume. A removed file stays removed
+        // overwrite it, so auto-save may resume, unless saving would change
+        // the file's encoding or line endings. A removed file stays removed
         // until the writer saves it again.
-        m_autoSaveSuspended = false;
+        m_autoSaveSuspended = !savesUnchanged(raw);
     } else {
         setKnownFileContents(QByteArray(), false);
     }
@@ -647,13 +648,6 @@ void Backend::setSearchHighlight(const QString &query, int currentMatchStart) {
         m_highlighter->setSearch(query, currentMatchStart);
 }
 
-void Backend::openExternalUrl(const QUrl &url) {
-    const QString scheme = url.scheme().toLower();
-    if (scheme == QStringLiteral("http") || scheme == QStringLiteral("https")
-            || scheme == QStringLiteral("mailto"))
-        QDesktopServices::openUrl(url);
-}
-
 QVariantMap Backend::windowGeometry() const {
     QSettings settings;
     return {{QStringLiteral("x"), settings.value(QStringLiteral("window/x"), -1)},
@@ -749,7 +743,6 @@ void Backend::setFileUrl(const QUrl &url) {
 
     m_fileUrl = url;
     emit fileUrlChanged();
-    watchCurrentFile();
 }
 
 void Backend::setModified(bool modified) {
@@ -770,16 +763,19 @@ void Backend::setStatus(const QString &status) {
 
 void Backend::saveTo(const QUrl &url) {
     if (!url.isLocalFile()) {
-        m_closeAfterSave = false;
         setStatus(QStringLiteral("Only local files can be saved."));
+        emit saveFailed();
         return;
     }
 
     const QString targetName = QFileInfo(url.toLocalFile()).fileName();
     QSaveFile file(url.toLocalFile());
+    // Without a temporary file beside it, as in a folder only the file itself
+    // may be written in, write the file in place rather than fail.
+    file.setDirectWriteFallback(true);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        m_closeAfterSave = false;
         setStatus(QStringLiteral("Could not save %1.").arg(targetName));
+        emit saveFailed();
         return;
     }
 
@@ -788,21 +784,17 @@ void Backend::saveTo(const QUrl &url) {
 
     // QSaveFile commits by replacing the target. Stop watching the old inode
     // before that replacement so our own write is not classified as external.
-    const QStringList watched = m_fileWatcher.files();
-    if (!watched.isEmpty())
-        m_fileWatcher.removePaths(watched);
+    unwatchFiles();
 
     // commit() flushes, fsyncs, and atomically renames the temp file into place,
     // returning false (and leaving the original untouched) on any write error.
     if (!file.commit()) {
         watchCurrentFile();
-        m_closeAfterSave = false;
         setStatus(QStringLiteral("Could not write %1.").arg(targetName));
+        emit saveFailed();
         return;
     }
 
-    const bool shouldClose = m_closeAfterSave;
-    m_closeAfterSave = false;
     setKnownFileContents(contents, true);
     m_autoSaveSuspended = false;
     m_autoSaveTimer.stop();
@@ -814,9 +806,6 @@ void Backend::saveTo(const QUrl &url) {
     setStatus(QStringLiteral("Saved %1").arg(fileName()));
     clearRecovery();
     emit saveSucceeded();
-
-    if (shouldClose)
-        emit closeAfterSave();
 }
 
 void Backend::scheduleRecovery() {
@@ -824,9 +813,10 @@ void Backend::scheduleRecovery() {
 }
 
 void Backend::scheduleAutoSave() {
-    // Only auto-save documents that already live on disk. Untitled drafts are
-    // left to manual save so auto-save never silently opens a file picker or
-    // creates a file the writer did not name; crash recovery still covers them.
+    // Only auto-save documents with a file name. Untitled drafts are left to
+    // manual save so auto-save never silently opens a file picker or creates a
+    // file the writer did not name; crash recovery still covers them. A named
+    // file that does not exist yet waits for an explicit save (see autoSave()).
     if (m_fileUrl.isLocalFile() && !m_autoSaveSuspended && !m_autoSaveHeld)
         m_autoSaveTimer.start();
 }
@@ -846,27 +836,19 @@ void Backend::autoSave() {
     // Never write over a version we have not seen. The watcher normally
     // catches outside edits first, but it can miss some (or fire late), so
     // check the file itself right before replacing it.
-    QFile file(m_fileUrl.toLocalFile());
-    const bool exists = file.exists();
+    const bool exists = QFileInfo::exists(m_fileUrl.toLocalFile());
     if (!m_hasKnownFileContents) {
-        // A removed file, or a recovered draft whose file was gone, waits for
-        // an explicit save rather than being silently recreated.
+        // A removed file, a new one not yet saved, or a recovered draft whose
+        // file was gone waits for an explicit save rather than being created.
         suspendAutoSave();
         if (exists)
             emit externalChangeDetected(false, m_modified);
         return;
     }
-    // Read as open() does, so CRLF files compare equal to what we loaded.
-    if (!exists || !file.open(QIODevice::ReadOnly | QIODevice::Text)
-            || file.readAll() != m_lastKnownFileContents) {
-        // As in the watcher: what we last read is no longer on disk, so it
-        // cannot count as saved until the writer picks a version.
-        setKnownFileContents(QByteArray(), false);
-        suspendAutoSave();
-        emit externalChangeDetected(!exists, m_modified);
+    if (!diskMatchesKnownContents()) {
+        reportExternalChange(!exists);
         return;
     }
-    file.close();
 
     saveTo(m_fileUrl);
 }
@@ -877,22 +859,43 @@ void Backend::suspendAutoSave() {
     m_autoSaveSuspended = true;
 }
 
-QString Backend::recoveryPath() const {
-    return m_recoveryPath;
+// Whether the file still holds what we last read or wrote, read as open()
+// reads it so carriage returns compare equal.
+bool Backend::diskMatchesKnownContents() const {
+    if (!m_hasKnownFileContents)
+        return false;
+    QFile file(m_fileUrl.toLocalFile());
+    return file.open(QIODevice::ReadOnly | QIODevice::Text)
+        && file.readAll() == m_lastKnownFileContents;
+}
+
+void Backend::reportExternalChange(bool deleted) {
+    // Whatever is on disk now, it is not what we last read, so the baseline is
+    // unknown until the writer picks a version. A deletion counts: the old
+    // text is not saved anywhere either.
+    setKnownFileContents(QByteArray(), false);
+    suspendAutoSave();
+    emit externalChangeDetected(deleted, m_modified);
+}
+
+// Saving writes UTF-8 with plain line endings; anything else on disk would be
+// rewritten by it.
+bool Backend::savesUnchanged(const QByteArray &raw) {
+    return !raw.contains('\r') && QString::fromUtf8(raw).toUtf8() == raw;
 }
 
 void Backend::setKnownFileContents(const QByteArray &contents, bool known) {
     m_lastKnownFileContents = contents;
     m_hasKnownFileContents = known;
-    m_lastKnownFileText = known
-        ? QString::fromUtf8(contents).replace(QStringLiteral("\r\n"), QStringLiteral("\n"))
-        : QString();
+    // Every caller reads in text mode or writes plain line endings, so there
+    // are no carriage returns to strip.
+    m_lastKnownFileText = known ? QString::fromUtf8(contents) : QString();
 }
 
 void Backend::writeRecovery() {
     if (!m_modified)
         return;
-    const QString path = recoveryPath();
+    const QString path = m_recoveryPath;
     if (path.isEmpty())
         return;
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -906,12 +909,15 @@ void Backend::writeRecovery() {
 }
 
 void Backend::restoreRecovery() {
-    QFile file(recoveryPath());
+    QFile file(m_recoveryPath);
     if (!file.open(QIODevice::ReadOnly))
         return;
     const QJsonDocument json = QJsonDocument::fromJson(file.readAll());
-    if (!json.isObject() || !json.object().contains(QStringLiteral("text")))
+    if (!json.isObject() || !json.object().contains(QStringLiteral("text"))) {
+        // Unreadable now means unreadable every launch; do not keep claiming it.
+        file.remove();
         return;
+    }
     const QJsonObject recovery = json.object();
     loadDocumentText(recovery.value(QStringLiteral("text")).toString());
     const QUrl recoveredUrl(recovery.value(QStringLiteral("fileUrl")).toString());
@@ -932,13 +938,17 @@ void Backend::restoreRecovery() {
 
 void Backend::clearRecovery() {
     m_recoveryTimer.stop();
-    QFile::remove(recoveryPath());
+    QFile::remove(m_recoveryPath);
 }
 
-void Backend::watchCurrentFile() {
+void Backend::unwatchFiles() {
     const QStringList watched = m_fileWatcher.files();
     if (!watched.isEmpty())
         m_fileWatcher.removePaths(watched);
+}
+
+void Backend::watchCurrentFile() {
+    unwatchFiles();
     if (m_fileUrl.isLocalFile() && QFileInfo::exists(m_fileUrl.toLocalFile()))
         m_fileWatcher.addPath(m_fileUrl.toLocalFile());
 }

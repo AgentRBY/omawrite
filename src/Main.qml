@@ -287,11 +287,6 @@ ApplicationWindow {
             saveFileDialog.open();
         }
 
-        function onCloseAfterSave() {
-            win.closeConfirmed = true;
-            win.close();
-        }
-
         function onSaveSucceeded() {
             // Only a save the writer chose in the prompt carries out the
             // pending close or open, never an auto-save that lands meanwhile.
@@ -299,6 +294,13 @@ ApplicationWindow {
             win.awaitingPendingSave = false;
             if (confirmed && win.pendingAction !== "")
                 win.completePendingAction();
+        }
+
+        function onSaveFailed() {
+            // A failed save leaves the document as it was, so the close or
+            // open it was for is off; a later save must not carry it out.
+            win.awaitingPendingSave = false;
+            win.pendingAction = "";
         }
 
         function onExternalChangeDetected(deleted, locallyModified) {
@@ -323,7 +325,6 @@ ApplicationWindow {
         nameFilters: ["Markdown files (*.md *.markdown)", "All files (*)"]
         onAccepted: backend.saveAs(selectedFile)
         onRejected: {
-            backend.fileDialogCanceled();
             win.awaitingPendingSave = false;
             win.pendingAction = "";
         }
@@ -363,6 +364,7 @@ ApplicationWindow {
         textScale: win.textScale
         textColor: win.textColor
         strongTextColor: win.strongTextColor
+        activeButtonColor: backend.themeAccent
         containerWidth: win.width
         containerHeight: win.height
 

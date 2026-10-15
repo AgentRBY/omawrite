@@ -73,10 +73,8 @@ public:
     Q_INVOKABLE void open(const QUrl &url);
     void openOrStartFile(const QUrl &url);
     Q_INVOKABLE void save();
-    Q_INVOKABLE void saveForClose();
     Q_INVOKABLE void saveAsDialog();
     Q_INVOKABLE void saveAs(const QUrl &url);
-    Q_INVOKABLE void fileDialogCanceled();
     Q_INVOKABLE void discardRecovery();
     Q_INVOKABLE void reloadFromDisk();
     Q_INVOKABLE void keepExternalVersion();
@@ -94,7 +92,6 @@ public:
     Q_INVOKABLE QString linkUrlAt(int position) const;
     Q_INVOKABLE int cursorPositionStep(int position, int direction) const;
     Q_INVOKABLE void setSearchHighlight(const QString &query, int currentMatchStart);
-    Q_INVOKABLE void openExternalUrl(const QUrl &url);
     Q_INVOKABLE QVariantMap windowGeometry() const;
     Q_INVOKABLE void saveWindowGeometry(int x, int y, int width, int height, bool maximized);
     Q_INVOKABLE void documentFontChanged();
@@ -108,7 +105,7 @@ signals:
     void textScaleChanged();
     void themeColorsChanged();
     void editorFontChanged();
-    void closeAfterSave();
+    void saveFailed();
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
     void saveSucceeded();
@@ -138,8 +135,11 @@ private:
     void suspendAutoSave();
     void restoreRecovery();
     void clearRecovery();
-    QString recoveryPath() const;
+    bool diskMatchesKnownContents() const;
+    void reportExternalChange(bool deleted);
+    static bool savesUnchanged(const QByteArray &raw);
     void setKnownFileContents(const QByteArray &contents, bool known);
+    void unwatchFiles();
     void watchCurrentFile();
     void loadOmarchyTheme();
     void watchOmarchyTheme();
@@ -152,7 +152,6 @@ private:
     qreal m_desktopTextScale = 1.0;
     qreal m_textZoom = 1.0;
     bool m_loading = false;
-    bool m_closeAfterSave = false;
     bool m_formattingTypography = false;
     int m_formattedBlockCount = 0;
     int m_lastChangePos = 0;

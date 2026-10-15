@@ -1826,22 +1826,37 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("theirs, edited"));
     }
 
-    void autoSavesFilesWithWindowsLineEndings() {
+    // Saving writes UTF-8 with plain line endings, so a file holding anything
+    // else is only rewritten by an explicit save, never by typing.
+    void keepsOtherEncodingsAndLineEndingsOutOfAutoSave() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        const QString path = directory.filePath(QStringLiteral("crlf.md"));
-        writeFile(path, "one\r\ntwo\r\n");
+        const QList<QByteArray> originals{QByteArray("one\r\ntwo\r\n"),
+                                          QByteArray("caf\xe9\n")};
+        for (const QByteArray &original : originals) {
+            const QString path = directory.filePath(QStringLiteral("kept.md"));
+            writeFile(path, original);
 
-        Backend backend;
-        QScopedPointer<QObject> editor(makeEditor(backend));
-        QVERIFY(editor);
-        backend.open(QUrl::fromLocalFile(path));
-        QSignalSpy externalChangeSpy(&backend, &Backend::externalChangeDetected);
+            Backend backend;
+            QScopedPointer<QObject> editor(makeEditor(backend));
+            QVERIFY(editor);
+            backend.open(QUrl::fromLocalFile(path));
+            QVERIFY(backend.status().contains(QStringLiteral("Auto-save is off")));
 
-        editor->setProperty("text", QStringLiteral("one\ntwo\nthree\n"));
-        QVERIFY(backend.editorTextChanged());
-        QTRY_VERIFY(!backend.modified());
-        QCOMPARE(externalChangeSpy.count(), 0);
+            editor->setProperty("text", QStringLiteral("changed\n"));
+            QVERIFY(backend.editorTextChanged());
+            QVERIFY(!backend.m_autoSaveTimer.isActive());
+            QTest::qWait(700);
+            QCOMPARE(readFile(path), original);
+
+            // Keeping our version over an outside edit does not lift it either.
+            backend.keepExternalVersion();
+            QVERIFY(!backend.m_autoSaveTimer.isActive());
+
+            // An explicit save still writes.
+            backend.save();
+            QCOMPARE(readFile(path), QByteArray("changed\n"));
+        }
     }
 
     void holdsAutoSaveWhileTheWriterDecides() {
@@ -1916,6 +1931,143 @@ private slots:
         backend.openOrStartFile(QUrl::fromLocalFile(path));
         QCOMPARE(backend.status(), QStringLiteral("Could not open new.md."));
         QVERIFY(backend.fileName() != QStringLiteral("new.md"));
+    }
+
+    void namesARelativeFileByItsFullPath() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString previous = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(directory.path()));
+
+        Backend backend;
+        backend.openOrStartFile(QUrl::fromLocalFile(QStringLiteral("relative.md")));
+        QDir::setCurrent(previous);
+
+        // A recovery draft written later must not depend on the directory.
+        QCOMPARE(backend.fileUrl().toLocalFile(),
+                 QDir(directory.path()).absoluteFilePath(QStringLiteral("relative.md")));
+    }
+
+    void saysWhenARecoveredDraftKeepsAFileFromOpening() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("asked.md"));
+        writeFile(path, "on disk");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        // As after restoring a draft: the window holds unsaved text.
+        editor->setProperty("text", QStringLiteral("recovered"));
+        QVERIFY(backend.editorTextChanged());
+
+        backend.openOrStartFile(QUrl::fromLocalFile(path));
+        QCOMPARE(backend.status(),
+                 QStringLiteral("Recovered unsaved changes; asked.md was not opened."));
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("recovered"));
+        backend.discardRecovery();
+    }
+
+    void dropsAPendingCloseWhenItsSaveFails() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY2(window, qPrintable(component.errorString()));
+
+        // The writer chose Save in the close prompt, and the save failed.
+        window->setProperty("pendingAction", QStringLiteral("close"));
+        window->setProperty("awaitingPendingSave", true);
+        QSignalSpy failedSpy(&backend, &Backend::saveFailed);
+        backend.saveAs(QUrl::fromLocalFile(QStringLiteral("/nonexistent-dir/x.md")));
+        QCOMPARE(failedSpy.count(), 1);
+
+        // A later save, such as an auto-save, must not close the window.
+        QCOMPARE(window->property("pendingAction").toString(), QString());
+        QVERIFY(!window->property("awaitingPendingSave").toBool());
+    }
+
+    void savesInAFolderItCannotWriteNewFilesIn() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("shared.md"));
+        writeFile(path, "before");
+        QFile::setPermissions(directory.path(), QFile::ReadOwner | QFile::ExeOwner);
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.open(QUrl::fromLocalFile(path));
+        editor->setProperty("text", QStringLiteral("after"));
+        QVERIFY(backend.editorTextChanged());
+        backend.save();
+        QFile::setPermissions(directory.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+
+        QVERIFY(!backend.modified());
+        QCOMPARE(readFile(path), QByteArray("after"));
+    }
+
+    void removesARecoveryDraftItCannotRead() {
+        Backend backend;
+        const QString draft = backend.m_recoveryPath;
+        QVERIFY(!draft.isEmpty());
+        writeFile(draft, "not json");
+
+        // Attaching the document is when a draft is restored.
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        QVERIFY(!QFileInfo::exists(draft));
+        QVERIFY(!backend.modified());
+    }
+
+    void keepsWatchingAFileReplacedFromOutside() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("watched.md"));
+        writeFile(path, "first");
+
+        Backend backend;
+        QScopedPointer<QObject> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.open(QUrl::fromLocalFile(path));
+        QSignalSpy externalSpy(&backend, &Backend::externalChangeDetected);
+
+        // Editors and sync tools often replace a file rather than write into it.
+        const QString replacement = directory.filePath(QStringLiteral("replacement"));
+        writeFile(replacement, "second");
+        QVERIFY(QFile::remove(path));
+        QVERIFY(QFile::rename(replacement, path));
+        QTRY_VERIFY(externalSpy.count() >= 1);
+        QTRY_VERIFY(backend.m_fileWatcher.files().contains(path));
+    }
+
+    void keepsTheWritersTextWhenTheChangeDialogIsDismissed() {
+        QQmlEngine engine;
+        QQmlComponent component(&engine);
+        component.setData("import QtQuick\nimport QtQuick.Controls\nApplicationWindow {"
+                          " property alias dialog: dialog\n"
+                          " ExternalChangeDialog { id: dialog } }",
+                          QUrl::fromLocalFile(QFINDTESTDATA("../src/Main.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> window(component.create());
+        QVERIFY(window);
+        QObject *dialog = window->property("dialog").value<QObject *>();
+        QVERIFY(dialog);
+        QSignalSpy keepSpy(dialog, SIGNAL(keepRequested()));
+        QSignalSpy reloadSpy(dialog, SIGNAL(reloadRequested()));
+
+        // Escape closes it without a choice.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "open"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(QMetaObject::invokeMethod(dialog, "close"));
+        QTRY_COMPARE(keepSpy.count(), 1);
+        QCOMPARE(reloadSpy.count(), 0);
     }
 
     void opensAnExistingFileFromTheCommandLine() {
