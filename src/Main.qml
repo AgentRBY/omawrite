@@ -718,20 +718,18 @@ ApplicationWindow {
                     replaceSelectionWith("\n\n");
                 }
 
-                // Tab nests the list items the caret or selection touches under
-                // the item above them, in line with its text, and Shift+Tab
-                // lifts them back beside their parent. Anywhere else, code
-                // fences included, Tab is left alone.
+                // Tab nests the list items the caret or selection touches one
+                // step under the item above them, and Shift+Tab lifts them a
+                // step back out. Anywhere else, code fences included, Tab is
+                // left alone.
                 function indentListItems(outdent) {
-                    // An item is its indent plus the marker and spaces that
-                    // reach its text. "* * *" and "- - -" are rules, not items.
+                    // "* * *" and "- - -" are rules, not items.
                     var listItem = function(line) {
-                        if (/^ {0,3}([-*])([ \t]*\1){2,}[ \t]*$/.test(line))
-                            return null;
-                        return line.match(/^([ \t]*)((?:[-+*]|\d+[.)])[ \t]+)/);
+                        return /^[ \t]*(?:[-+*]|\d+[.)])[ \t]/.test(line)
+                            && !/^ {0,3}([-*])([ \t]*\1){2,}[ \t]*$/.test(line);
                     };
-                    var columns = function(indent) {
-                        return indent.replace(/\t/g, "    ").length;
+                    var columns = function(line) {
+                        return line.match(/^[ \t]*/)[0].replace(/\t/g, "    ").length;
                     };
 
                     // A selection that ends at the start of a line leaves it be.
@@ -740,35 +738,26 @@ ApplicationWindow {
                     if (end < 0)
                         end = text.length;
                     var lines = text.slice(start, end).split("\n");
-                    var first = lines.map(listItem).filter(Boolean)[0];
-                    if (!first || backend.insideFence(start))
+                    var first = lines.filter(listItem)[0];
+                    if (first === undefined || backend.insideFence(start))
                         return false;
 
-                    // Tab nests under the closest item above that is level with
-                    // the first one, Shift+Tab steps out beside the closest one
-                    // further out. A paragraph in between means the list ended.
-                    var depth = columns(first[1]);
-                    var above = text.slice(0, start).split("\n").reverse();
-                    var item = null;
-                    for (var i = 0; i < above.length && !item; i++) {
-                        var line = listItem(above[i]);
-                        if (!line && /^\S/.test(above[i]))
-                            break;
-                        if (line && (outdent ? columns(line[1]) < depth : columns(line[1]) <= depth))
-                            item = line;
-                    }
-                    var indent = item ? columns(item[1]) : 0;
-                    var target = outdent ? indent
-                        : item && indent === depth ? indent + item[2].length : depth;
-                    if (target === depth)
+                    // Tab needs an item above, level with the first or further
+                    // out, to nest under. A paragraph in between means the list
+                    // ended. Shift+Tab needs an indent to take away.
+                    var depth = columns(first);
+                    var above = text.slice(0, start).split("\n").reverse().find(function(line) {
+                        return listItem(line) ? columns(line) <= depth : /^\S/.test(line);
+                    });
+                    if (outdent ? depth === 0 : !(above && listItem(above)))
                         return true;
 
-                    // Every line moves by the same step, so nesting within the
-                    // selection is kept.
+                    // Four spaces nest under any marker up to "99.", and every
+                    // line moves by them, so nesting within the selection is kept.
                     var moved = lines.map(function(line) {
                         var lead = line.match(/^[ \t]*/)[0];
                         return /\S/.test(line)
-                            ? " ".repeat(Math.max(0, columns(lead) + target - depth)) + line.slice(lead.length)
+                            ? " ".repeat(Math.max(0, columns(line) + (outdent ? -4 : 4))) + line.slice(lead.length)
                             : line;
                     });
                     var nested = moved.join("\n");
