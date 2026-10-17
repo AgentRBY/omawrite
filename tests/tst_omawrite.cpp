@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QFont>
+#include <QAbstractTextDocumentLayout>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextLayout>
@@ -68,6 +69,34 @@ private slots:
         QCOMPARE(Backend::countWords(QStringLiteral("𠀀𠀁 foo")), 3);
         QCOMPARE(Backend::countWords(QStringLiteral("안녕하세요 세계")), 2);
         QCOMPARE(Backend::countWords(QString()), 0);
+    }
+
+    void restylesTheWholeDocumentWithItsLayoutFinished() {
+        // Qt Quick's render thread lays out any block left without a layout,
+        // starting the layout's timers from the wrong thread.
+        QTextDocument document;
+        document.setTextWidth(600);
+        QStringList lines;
+        for (int i = 0; i < 3000; ++i)
+            lines << QStringLiteral("line %1 with **bold** and a [link](u)").arg(i);
+        document.setPlainText(lines.join(QLatin1Char('\n')));
+        MarkdownHighlighter highlighter(&document);
+        document.documentLayout()->documentSize();
+
+        const auto unlaidBlocks = [&document] {
+            int count = 0;
+            for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+                if (block.layout()->lineCount() == 0)
+                    ++count;
+            }
+            return count;
+        };
+        highlighter.setSearch(QStringLiteral("line"), -1);
+        QCOMPARE(unlaidBlocks(), 0);
+        highlighter.setSearch(QString(), -1);
+        QCOMPARE(unlaidBlocks(), 0);
+        highlighter.setTheme(false, QString(), QString(), QString(), QString());
+        QCOMPARE(unlaidBlocks(), 0);
     }
 
     void normalizesLinks() {

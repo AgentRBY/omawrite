@@ -1,5 +1,6 @@
 #include "markdownhighlighter.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QColor>
 #include <QFont>
 #include <QFontMetricsF>
@@ -73,6 +74,10 @@ void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart)
 // one, so a full restyle grows with the square of its length: 40 s for a 2 MB
 // file. A null page size makes the layout skip that work, so restyle under one
 // and lay the document out once when the real size comes back.
+//
+// That layout has to finish here. Restoring the size only starts a lazy one,
+// and Qt Quick's render thread would lay out whatever it reaches first,
+// starting the layout's timers from the wrong thread.
 void MarkdownHighlighter::rehighlightAll() {
     QTextDocument *doc = document();
     if (!doc) {
@@ -83,6 +88,8 @@ void MarkdownHighlighter::rehighlightAll() {
     doc->setPageSize(QSizeF(0, 0));
     rehighlight();
     doc->setPageSize(pageSize);
+    if (QAbstractTextDocumentLayout *layout = doc->documentLayout())
+        layout->documentSize();
 }
 
 void MarkdownHighlighter::rebuildFormats() {
