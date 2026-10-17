@@ -13,6 +13,9 @@ Dialog {
     property real textScale: 1
     property int containerWidth: 1280
     property int containerHeight: 820
+    property string edition: ""
+    readonly property string versionText: "Omawrite " + Qt.application.version
+        + (edition.length > 0 ? " · " + edition : "")
     // Other features can add their bindings without coupling this component
     // to the backend or to a particular editor layout.
     property var extraShortcuts: []
@@ -64,17 +67,35 @@ Dialog {
         radius: 0
     }
 
-    header: Label {
-        text: root.title
-        leftPadding: 24
-        rightPadding: 24
-        topPadding: 20
-        bottomPadding: 8
-        color: root.strongTextColor
-        font.family: "IBM Plex Mono"
-        font.pixelSize: Math.round(15 * root.textScale)
-        font.bold: true
-        wrapMode: Text.Wrap
+    header: ColumnLayout {
+        spacing: 6
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: 24
+            Layout.rightMargin: 24
+            Layout.topMargin: 20
+            Layout.bottomMargin: Qt.application.version.length > 0 ? 0 : 8
+            text: root.title
+            color: root.strongTextColor
+            font.family: "IBM Plex Mono"
+            font.pixelSize: Math.round(15 * root.textScale)
+            font.bold: true
+            wrapMode: Text.Wrap
+        }
+        Label {
+            objectName: "versionLabel"
+            Layout.fillWidth: true
+            Layout.leftMargin: 24
+            Layout.rightMargin: 24
+            Layout.bottomMargin: 8
+            text: root.versionText
+            visible: Qt.application.version.length > 0
+            color: root.textColor
+            opacity: 0.75
+            font.family: "IBM Plex Mono"
+            font.pixelSize: Math.round(11 * root.textScale)
+            wrapMode: Text.Wrap
+        }
     }
 
     contentItem: ScrollView {
