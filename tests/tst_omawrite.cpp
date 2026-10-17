@@ -47,6 +47,7 @@ class OmawriteTest : public QObject {
 
 private slots:
     void initTestCase() {
+        QCoreApplication::setApplicationVersion(QStringLiteral("1.2.3-test"));
         QStandardPaths::setTestModeEnabled(true);
         QVERIFY(m_settingsDirectory.isValid());
         QQuickStyle::setStyle(QStringLiteral("Material"));
@@ -2198,6 +2199,11 @@ private slots:
         for (auto key : {Qt::Key_Slash, Qt::Key_Question, Qt::Key_F1}) {
             QTest::keyClick(window, key, key == Qt::Key_F1 ? Qt::NoModifier : Qt::ControlModifier);
             QTRY_VERIFY(dialog->property("opened").toBool());
+            QObject *versionLabel = dialog->findChild<QObject *>(QStringLiteral("versionLabel"));
+            QVERIFY(versionLabel);
+            QVERIFY(versionLabel->property("visible").toBool());
+            QCOMPARE(versionLabel->property("text").toString(),
+                     QStringLiteral("Omawrite ") + QCoreApplication::applicationVersion());
             QTest::keyClick(window, Qt::Key_Minus, Qt::ControlModifier);
             QCOMPARE(backend.textScale(), scale);
             QVERIFY(dialog->property("x").toReal() >= 0);
