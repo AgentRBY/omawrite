@@ -2161,6 +2161,65 @@ private slots:
         QCOMPARE(bindingLoops.count(), 0);
     }
 
+    void shortcutReferenceFitsTheWindow_data() {
+        QTest::addColumn<int>("windowWidth");
+        QTest::addColumn<qreal>("scale");
+        QTest::newRow("standard") << 1280 << qreal(1);
+        QTest::newRow("narrow") << 394 << qreal(1);
+        QTest::newRow("small-text") << 720 << qreal(0.5);
+        QTest::newRow("large-text") << 720 << qreal(3);
+        QTest::newRow("narrow-large-text") << 394 << qreal(3);
+    }
+
+    void shortcutReferenceFitsTheWindow() {
+        QFETCH(int, windowWidth);
+        QFETCH(qreal, scale);
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        Backend backend;
+        backend.setDesktopTextScale(scale);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->setMinimumWidth(0);
+        window->setWidth(windowWidth);
+        window->setHeight(520);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate();
+        QTRY_VERIFY(window->isActive());
+        QObject *dialog = window->findChild<QObject *>(QStringLiteral("shortcutsDialog"));
+        QVERIFY(dialog);
+
+        // All aliases open the dialog, and Escape closes it without changing text size.
+        for (auto key : {Qt::Key_Slash, Qt::Key_Question, Qt::Key_F1}) {
+            QTest::keyClick(window, key, key == Qt::Key_F1 ? Qt::NoModifier : Qt::ControlModifier);
+            QTRY_VERIFY(dialog->property("opened").toBool());
+            QTest::keyClick(window, Qt::Key_Minus, Qt::ControlModifier);
+            QCOMPARE(backend.textScale(), scale);
+            QVERIFY(dialog->property("x").toReal() >= 0);
+            QVERIFY(dialog->property("y").toReal() >= 0);
+            QVERIFY(dialog->property("x").toReal() + dialog->property("width").toReal()
+                    <= window->width());
+            QVERIFY(dialog->property("y").toReal() + dialog->property("height").toReal()
+                    <= window->height());
+            auto *grid = dialog->findChild<QQuickItem *>(QStringLiteral("shortcutsGrid"));
+            QVERIFY(grid);
+            QCoreApplication::processEvents();
+            for (auto *row : grid->childItems()) {
+                if (!row->inherits("QQuickRowLayout")) continue;
+                QVERIFY(row->x() + row->width() <= grid->width() + 1);
+                for (auto *label : row->childItems())
+                    QVERIFY(label->x() + label->width() <= row->width() + 1);
+            }
+            QTest::keyClick(window, Qt::Key_Escape);
+            QTRY_VERIFY(!dialog->property("visible").toBool());
+        }
+    }
+
     void remembersLastSaveDirectory() {
         QTemporaryDir saveDirectory;
         QVERIFY(saveDirectory.isValid());
