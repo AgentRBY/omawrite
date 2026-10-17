@@ -28,14 +28,14 @@ void MarkdownHighlighter::setTheme(bool darkMode, const QString &background,
     m_customAccent = accent;
     m_customCodeBackground = codeBackground;
     rebuildFormats();
-    rehighlight();
+    rehighlightAll();
 }
 
 // The hidden marker spacing is measured from the document's default font, so
 // it has to be remeasured whenever the editor switches typeface.
 void MarkdownHighlighter::refreshFont() {
     rebuildFormats();
-    rehighlight();
+    rehighlightAll();
 }
 
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
@@ -55,7 +55,7 @@ void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart)
         m_currentMatch.setPosition(qBound(0, currentMatchStart, document()->characterCount() - 1));
     }
     if (!sameQuery) {
-        rehighlight();
+        rehighlightAll();
         return;
     }
 
@@ -66,6 +66,23 @@ void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart)
         rehighlightBlock(left);
     if (entered.isValid() && entered != left)
         rehighlightBlock(entered);
+}
+
+// QSyntaxHighlighter::rehighlight() marks the blocks dirty one at a time, and
+// a laid-out document redoes layout work for the rest of itself after each
+// one, so a full restyle grows with the square of its length: 40 s for a 2 MB
+// file. A null page size makes the layout skip that work, so restyle under one
+// and lay the document out once when the real size comes back.
+void MarkdownHighlighter::rehighlightAll() {
+    QTextDocument *doc = document();
+    if (!doc) {
+        rehighlight();
+        return;
+    }
+    const QSizeF pageSize = doc->pageSize();
+    doc->setPageSize(QSizeF(0, 0));
+    rehighlight();
+    doc->setPageSize(pageSize);
 }
 
 void MarkdownHighlighter::rebuildFormats() {
