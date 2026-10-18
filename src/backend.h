@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QByteArray>
 #include <QFileSystemWatcher>
+#include <QFutureWatcher>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -163,6 +164,11 @@ private:
     int m_lastChangePos = 0;
     int m_lastChangeAdded = 0;
     QTimer m_wordCountTimer;
+    // Counting a large document stalls typing, so counts run on a worker
+    // thread. A load outdates the count in flight, and its result is dropped.
+    QFutureWatcher<int> m_wordCountWatcher;
+    bool m_wordCountStale = false;
+    bool m_wordCountAgain = false;
     QTimer m_recoveryTimer;
     QTimer m_autoSaveTimer;
     QFileSystemWatcher m_fileWatcher;
