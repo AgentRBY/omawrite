@@ -856,7 +856,7 @@ ApplicationWindow {
                     }
 
                     var pos = backend.cursorPositionStep(cursorPosition, direction);
-                    cursorPosition = Math.max(0, Math.min(text.length, pos));
+                    cursorPosition = Math.max(0, Math.min(length, pos));
                 }
 
                 function movePage(direction, extendSelection) {
@@ -875,7 +875,9 @@ ApplicationWindow {
                     if (selectionStart !== selectionEnd || cursorPosition < 2)
                         return false;
 
-                    if (text.slice(cursorPosition - 2, cursorPosition) !== "\n\n")
+                    // getText reads just the two characters, where text would
+                    // copy the whole document on every Backspace.
+                    if (getText(cursorPosition - 2, cursorPosition) !== "\n\n")
                         return false;
 
                     var start = cursorPosition - 2;
@@ -980,7 +982,7 @@ ApplicationWindow {
                     anchors.left: parent.left
                     anchors.top: parent.top
                     text: "# Start writing"
-                    visible: editor.text.length === 0 && !editor.activeFocus
+                    visible: editor.length === 0 && !editor.activeFocus
                     color: win.mutedColor
                     font.family: editor.font.family
                     font.pixelSize: editor.font.pixelSize
