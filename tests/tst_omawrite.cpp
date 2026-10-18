@@ -445,6 +445,52 @@ private slots:
         QCOMPARE(editor->property("selectedText").toString(), QString());
     }
 
+    void reopeningTheFindBarSearchesForWhatItHolds() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *searchField = window->findChild<QObject *>(QStringLiteral("searchField"));
+        QObject *replaceField = window->findChild<QObject *>(QStringLiteral("replaceField"));
+        QObject *replaceAllButton = window->findChild<QObject *>(QStringLiteral("replaceAllButton"));
+        QVERIFY(editor && searchField && replaceField && replaceAllButton);
+
+        editor->setProperty("text", QStringLiteral("foo bar foo"));
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("foo"));
+        QTRY_COMPARE(window->property("searchMatches").toList().size(), 2);
+
+        // A query changed just before closing the bar is searched on reopening,
+        // so Replace All does not cut at the old query's matches.
+        searchField->setProperty("text", QStringLiteral("o"));
+        QMetaObject::invokeMethod(window, "closeSearch");
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        replaceField->setProperty("text", QStringLiteral("x"));
+        QMetaObject::invokeMethod(replaceAllButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("fxx bar fxx"));
+
+        // Edits made while the bar was closed are searched on reopening too.
+        QMetaObject::invokeMethod(window, "closeSearch");
+        editor->setProperty("text", QStringLiteral("a bar"));
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("bar"));
+        QTRY_COMPARE(window->property("searchMatches").toList().size(), 1);
+        QMetaObject::invokeMethod(window, "closeSearch");
+        editor->setProperty("text", QStringLiteral("bar bar bar"));
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        QCOMPARE(window->property("searchMatches").toList().size(), 3);
+    }
+
     void reachesAndLeavesTheReplaceFieldFromTheKeyboard() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());

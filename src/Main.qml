@@ -148,6 +148,19 @@ ApplicationWindow {
         showSearchMatch(true);
     }
 
+    // The matches stop following the field and the text while the bar is
+    // closed, and a search still waiting for a pause is dropped on closing,
+    // so opening the bar searches again for what the field holds.
+    function openSearch(withReplace) {
+        searchOpen = true;
+        if (withReplace)
+            replaceOpen = true;
+        searchField.forceActiveFocus();
+        searchField.selectAll();
+        // A search still waiting in an open bar lands on its first match.
+        updateSearch(searchDelay.running);
+    }
+
     function closeSearch() {
         searchDelay.stop();
         // Hand focus to the editor before hiding the bar. Hiding the field
@@ -178,12 +191,7 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+H"
-        onActivated: {
-            searchOpen = true;
-            replaceOpen = true;
-            searchField.forceActiveFocus();
-            searchField.selectAll();
-        }
+        onActivated: win.openSearch(true)
     }
 
     Shortcut {
@@ -276,11 +284,7 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        onActivated: {
-            searchOpen = true;
-            searchField.forceActiveFocus();
-            searchField.selectAll();
-        }
+        onActivated: win.openSearch(false)
     }
 
     Shortcut {
