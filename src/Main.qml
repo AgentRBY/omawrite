@@ -733,8 +733,11 @@ ApplicationWindow {
                         return /^[ \t]*(?:[-+*]|\d+[.)])[ \t]/.test(line)
                             && !/^ {0,3}([-*])([ \t]*\1){2,}[ \t]*$/.test(line);
                     };
+                    // A tab runs to the next four-column stop.
                     var columns = function(line) {
-                        return line.match(/^[ \t]*/)[0].replace(/\t/g, "    ").length;
+                        return line.match(/^[ \t]*/)[0].split("").reduce(function(column, c) {
+                            return c === "\t" ? column + 4 - column % 4 : column + 1;
+                        }, 0);
                     };
 
                     // A selection that ends at the start of a line leaves it be.
