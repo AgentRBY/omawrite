@@ -162,18 +162,15 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     m_autoSaveTimer.setSingleShot(true);
     m_autoSaveTimer.setInterval(500);
     connect(&m_autoSaveTimer, &QTimer::timeout, this, &Backend::autoSave);
-    connect(&m_fileWatcher, &QFileSystemWatcher::fileChanged, this,
-            [this](const QString &path) {
-                if (path != m_fileUrl.toLocalFile())
-                    return;
-
-                // Atomic saves replace the watched inode, which drops it from
-                // the watcher, so re-arm it either way. Our own save is not an
-                // outside edit.
-                watchCurrentFile();
-                if (!diskMatchesKnownContents())
-                    reportExternalChange(!QFileInfo::exists(path));
-            });
+    // Tools that replace a file by removing it and writing it again leave it
+    // briefly missing, so let the burst settle before deciding what happened.
+    m_fileCheckTimer.setSingleShot(true);
+    m_fileCheckTimer.setInterval(100);
+    connect(&m_fileCheckTimer, &QTimer::timeout, this, &Backend::checkWatchedFile);
+    connect(&m_fileWatcher, &QFileSystemWatcher::fileChanged, &m_fileCheckTimer,
+            qOverload<>(&QTimer::start));
+    connect(&m_fileWatcher, &QFileSystemWatcher::directoryChanged, &m_fileCheckTimer,
+            qOverload<>(&QTimer::start));
 
     loadOmarchyTheme();
     watchOmarchyTheme();
@@ -275,6 +272,7 @@ void Backend::attachDocument(QObject *textDocument) {
     m_highlighter = new MarkdownHighlighter(m_document);
     m_highlighter->setTheme(m_darkMode, m_themeBackground, m_themeForeground, m_themeAccent,
                             m_themeCodeBackground);
+    m_highlighter->setCaret(m_caretPosition);
 
     connect(m_document, &QTextDocument::contentsChange, this,
             [this](int position, int, int charsAdded) {
@@ -543,39 +541,10 @@ bool Backend::editorTextChanged() {
     return true;
 }
 
-QVariantList Backend::hiddenRangesAt(int position) const {
-    QVariantList ranges;
-    if (!m_document)
-        return ranges;
-
-    const QTextBlock block =
-        m_document->findBlock(qBound(0, position, m_document->characterCount() - 1));
-    if (!block.isValid())
-        return ranges;
-
-    // The highlighter leaves fenced code alone, so it hides nothing there. A
-    // closing fence is the line whose previous block is still inside.
-    if (block.userState() >= MarkdownHighlighter::InsideFence
-            || block.previous().userState() >= MarkdownHighlighter::InsideFence)
-        return ranges;
-
-    const int lineStart = block.position();
-    QList<QPair<int, int>> spans;
-    const QList<MarkdownHighlighter::InlineMarkup> markup =
-        MarkdownHighlighter::inlineMarkup(block.text());
-    for (const MarkdownHighlighter::InlineMarkup &item : markup) {
-        for (const MarkdownHighlighter::Span &marker : item.markers) {
-            spans.append({lineStart + marker.start,
-                          lineStart + marker.start + marker.length});
-        }
-    }
-    std::sort(spans.begin(), spans.end());
-
-    for (const auto &span : spans) {
-        ranges.append(QVariantMap{{QStringLiteral("start"), span.first},
-                                  {QStringLiteral("end"), span.second}});
-    }
-    return ranges;
+void Backend::setCaretPosition(int position) {
+    m_caretPosition = position;
+    if (m_highlighter)
+        m_highlighter->setCaret(position);
 }
 
 // The emphasis span of the marker's kind that the caret sits in or against,
@@ -1037,15 +1006,39 @@ void Backend::clearRecovery() {
 }
 
 void Backend::unwatchFiles() {
-    const QStringList watched = m_fileWatcher.files();
+    m_fileCheckTimer.stop();
+    const QStringList watched = m_fileWatcher.files() + m_fileWatcher.directories();
     if (!watched.isEmpty())
         m_fileWatcher.removePaths(watched);
 }
 
+// A missing file cannot be watched, so watch its folder instead to notice it
+// coming back.
 void Backend::watchCurrentFile() {
     unwatchFiles();
-    if (m_fileUrl.isLocalFile() && QFileInfo::exists(m_fileUrl.toLocalFile()))
-        m_fileWatcher.addPath(m_fileUrl.toLocalFile());
+    if (!m_fileUrl.isLocalFile())
+        return;
+    const QFileInfo info(m_fileUrl.toLocalFile());
+    m_fileMissing = !info.exists();
+    if (info.exists())
+        m_fileWatcher.addPath(info.filePath());
+    else if (info.dir().exists())
+        m_fileWatcher.addPath(info.dir().path());
+}
+
+void Backend::checkWatchedFile() {
+    // Atomic saves replace the watched inode, which drops it from the
+    // watcher, so re-arm it either way. Our own save is not an outside edit.
+    const bool wasMissing = m_fileMissing;
+    watchCurrentFile();
+    if (diskMatchesKnownContents())
+        return;
+    // A file that was already missing has been reported, or was never there.
+    // One that turns up again is an outside edit like any other, even while
+    // the writer is still looking at the removal.
+    if (m_fileMissing && wasMissing)
+        return;
+    reportExternalChange(m_fileMissing);
 }
 
 // A quoted TOML value ends at its closing quote; whatever trails it is an inline comment.
