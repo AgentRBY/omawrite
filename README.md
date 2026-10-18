@@ -53,8 +53,43 @@ Omawrite at the size it is designed around; larger and smaller sizes scale from 
 
 ## Requirements
 
-- Qt 6: `qt6-base`, `qt6-declarative`, `qt6-quickcontrols2`
+- Qt 6: `qt6-base` and `qt6-declarative` (which includes Qt Quick Controls)
 - `xdg-desktop-portal` and a portal backend
 
 The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
 `fonts/OFL.txt`. The font is copyright IBM Corp.
+
+## Build and install
+
+For a local build, install the Qt requirements above, a C++17 compiler such as
+`gcc`, and `make`. The build scripts use `qmake6` (or `qmake`), and the tests use
+QtTest; both ship in `qt6-base`.
+
+```sh
+./bin/build
+./bin/test
+./build/omawrite
+```
+
+`bin/test` runs the Qt test suite with the offscreen platform, so it does not
+require an active graphical session. To open a file with the local build:
+
+```sh
+./build/omawrite path/to/document.md
+```
+
+On Arch Linux or Omarchy, install `base-devel` for the packaging tools, then
+build and install the package:
+
+```sh
+./bin/install
+```
+
+This runs the local build and `makepkg -fsi`, which installs the package through
+pacman and may ask for authentication. To build a package archive for inspection
+without installing it:
+
+```sh
+cd pkgbuild
+makepkg -f
+```
