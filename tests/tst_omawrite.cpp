@@ -1862,10 +1862,12 @@ private slots:
         backtabKey();
         QCOMPARE(text(), QStringLiteral("1. a\n    - b\n    - c"));
 
-        // The first item has nothing to nest under, an outermost one nowhere
-        // to go, and a tab-indented one comes out all the same.
+        // The first item nests all the same, an outermost one has nowhere to
+        // go, and a tab-indented one comes out like a spaced one.
         load(QStringLiteral("- a"), 3);
         tabKey();
+        QCOMPARE(text(), QStringLiteral("    - a"));
+        backtabKey();
         backtabKey();
         QCOMPARE(text(), QStringLiteral("- a"));
         load(QStringLiteral("- a\n\t- b"), 8);
@@ -1880,6 +1882,30 @@ private slots:
         tabKey();
         QCOMPARE(text(), QStringLiteral("- a\n    - b\n        - c\n- d"));
         QCOMPARE(selection(), QStringLiteral("8-24@8"));
+
+        // Shift+Tab lifts every line by the first item's step, so a shallow
+        // item does not flatten the one nested under it.
+        load(QStringLiteral("- a\n  - b\n    - c"), 6);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b\n  - c"));
+
+        // Indented continuation lines move with their item, but a paragraph
+        // at the margin is no item, so Tab leaves the list alone.
+        load(QStringLiteral("- a\n- b\n  more"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n    - b\n      more"));
+        load(QStringLiteral("- a\n- b\n\nParagraph"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 18));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
+
+        // A selection running from a list into a code fence leaves it alone.
+        load(QStringLiteral("- a\n  ```\n  - x\n  ```"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
 
         // Outside a list, on a rule, and inside a code fence, Tab types a tab.
         load(QStringLiteral("plain"), 5);
