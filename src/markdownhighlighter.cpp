@@ -210,7 +210,8 @@ namespace {
 // Each UTF-16 unit case-folded and, for Latin and Greek letters, stripped of
 // its canonical diacritics: 'Ț' becomes 't'. Other scripts keep their marks,
 // since there they tell letters apart (и and й, か and が), and Hangul
-// syllables would fold to their first jamo. Surrogates map to themselves.
+// syllables would fold to their first jamo. Surrogates map to themselves here
+// and are folded in pairs by searchFolded.
 const char16_t *searchFoldTable() {
     static const std::vector<char16_t> table = [] {
         std::vector<char16_t> folded(0x10000);
@@ -257,6 +258,28 @@ QChar commaBelow(QChar c) {
     return c;
 }
 
+// The text folded unit by unit through the table, then each surrogate pair
+// case-folded as the one letter it encodes, which stays a pair: 𐐀 becomes 𐐨.
+QString searchFolded(const QString &text) {
+    const char16_t *fold = searchFoldTable();
+    QString folded(text.size(), Qt::Uninitialized);
+    const QChar *source = text.constData();
+    QChar *target = folded.data();
+    for (qsizetype i = 0; i < text.size(); ++i)
+        target[i] = QChar(fold[source[i].unicode()]);
+    for (qsizetype i = 0; i + 1 < text.size(); ++i) {
+        if (!source[i].isHighSurrogate() || !source[i + 1].isLowSurrogate())
+            continue;
+        const char32_t caseFolded = QChar::toCaseFolded(QChar::surrogateToUcs4(source[i], source[i + 1]));
+        if (QChar::requiresSurrogates(caseFolded)) {
+            target[i] = QChar(QChar::highSurrogate(caseFolded));
+            target[i + 1] = QChar(QChar::lowSurrogate(caseFolded));
+        }
+        ++i;
+    }
+    return folded;
+}
+
 } // namespace
 
 QList<int> MarkdownHighlighter::findMatches(const QString &text, const QString &query) {
@@ -265,24 +288,18 @@ QList<int> MarkdownHighlighter::findMatches(const QString &text, const QString &
     if (length == 0 || text.size() < length)
         return matches;
 
-    const char16_t *fold = searchFoldTable();
-    QString foldedQuery(length, Qt::Uninitialized);
+    const QString foldedQuery = searchFolded(query);
     // The query's accented letters, case-folded, which the text must match
     // as written rather than folded.
     QList<std::pair<qsizetype, QChar>> exact;
     for (qsizetype i = 0; i < length; ++i) {
         const QChar unit = query.at(i);
-        foldedQuery[i] = QChar(fold[unit.unicode()]);
         const QChar caseFolded = unit.toCaseFolded();
-        if (foldedQuery.at(i) != caseFolded)
+        if (!unit.isSurrogate() && foldedQuery.at(i) != caseFolded)
             exact.append({i, commaBelow(caseFolded)});
     }
 
-    QString foldedText(text.size(), Qt::Uninitialized);
-    const QChar *source = text.constData();
-    QChar *target = foldedText.data();
-    for (qsizetype i = 0; i < text.size(); ++i)
-        target[i] = QChar(fold[source[i].unicode()]);
+    const QString foldedText = searchFolded(text);
 
     qsizetype from = 0;
     while ((from = foldedText.indexOf(foldedQuery, from)) >= 0) {

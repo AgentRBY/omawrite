@@ -95,6 +95,10 @@ private slots:
         QCOMPARE(find(QStringLiteral("が か"), QStringLiteral("か")), Matches({2}));
         QCOMPARE(find(QStringLiteral("한 하"), QStringLiteral("하")), Matches({2}));
 
+        // Letters beyond the Basic Multilingual Plane still ignore case.
+        QCOMPARE(find(QStringLiteral("x 𐐀𐐁"), QStringLiteral("𐐨𐐩")), Matches({2}));
+        QCOMPARE(find(QStringLiteral("x 𐐨𐐩"), QStringLiteral("𐐀𐐁")), Matches({2}));
+
         // Matches do not overlap, and a near miss does not hide the next one.
         QCOMPARE(find(QStringLiteral("aaa"), QStringLiteral("aa")), Matches({0}));
         QCOMPARE(find(QStringLiteral("tțara"), QStringLiteral("țara")), Matches({1}));
