@@ -14,7 +14,7 @@
 #include "cli.h"
 #include "systemtheme.h"
 
-#define OMAWRITE_VERSION "0.7.0"
+#define OMAWRITE_VERSION "0.7.1"
 
 int main(int argc, char *argv[]) {
     // Answered before the application exists, so they need no display.
