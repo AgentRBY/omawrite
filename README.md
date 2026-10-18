@@ -53,17 +53,17 @@ Omawrite at the size it is designed around; larger and smaller sizes scale from 
 
 ## Requirements
 
-- Qt 6: `qt6-base`, `qt6-declarative`, `qt6-quickcontrols2`
+- Qt 6: `qt6-base` and `qt6-declarative` (which includes Qt Quick Controls)
 - `xdg-desktop-portal` and a portal backend
 
 The IBM Plex Mono font is bundled under the SIL Open Font License 1.1; see
 `fonts/OFL.txt`. The font is copyright IBM Corp.
 
-
 ## Build and install
 
-For a local build, install the Qt requirements above, a C++17 compiler, and
-`make`. The build scripts use `qmake6` (or `qmake`) from the Qt development tools.
+For a local build, install the Qt requirements above, a C++17 compiler such as
+`gcc`, and `make`. The build scripts use `qmake6` (or `qmake`), and the tests use
+QtTest; both ship in `qt6-base`.
 
 ```sh
 ./bin/build
