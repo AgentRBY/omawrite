@@ -1893,6 +1893,11 @@ private slots:
         QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
         backtabKey();
         QCOMPARE(text(), QStringLiteral("- a\n  - b\n- c"));
+        load(QStringLiteral("    - a\n    - b"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 10));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b"));
+        QCOMPARE(selection(), QStringLiteral("0-4@4"));
 
         // Indented continuation lines move with their item, but a paragraph
         // at the margin is no item, so Tab leaves the list alone.

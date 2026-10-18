@@ -769,7 +769,10 @@ ApplicationWindow {
                     });
                     var nested = moved.join("\n");
                     var from = Math.max(start, selectionStart + moved[0].length - lines[0].length);
-                    var to = Math.max(from, selectionEnd + nested.length - (end - start));
+                    // Neither end of the selection leaves its line, even when
+                    // the indent it sat in is gone.
+                    var lastStart = start + nested.length - moved[moved.length - 1].length;
+                    var to = Math.max(from, lastStart, selectionEnd + nested.length - (end - start));
                     var forward = cursorPosition === selectionEnd;
                     replaceText(start, end, nested);
                     select(forward ? from : to, forward ? to : from);
