@@ -13,12 +13,7 @@ Dialog {
     property real textScale: 1
     property int containerWidth: 1280
     property int containerHeight: 820
-    property string edition: ""
     readonly property string versionText: "Omawrite " + Qt.application.version
-        + (edition.length > 0 ? " · " + edition : "")
-    // Other features can add their bindings without coupling this component
-    // to the backend or to a particular editor layout.
-    property var extraShortcuts: []
     readonly property var shortcuts: [
         { key: "Ctrl+S", desc: "Save" },
         { key: "Ctrl+Shift+S", desc: "Save As" },
@@ -26,12 +21,13 @@ Dialog {
         { key: "Ctrl+N", desc: "New Window" },
         { key: "Ctrl+P", desc: "Print" },
         { key: "Ctrl+Z", desc: "Undo" },
-        { key: "Ctrl+Shift+Z\nCtrl+Y", desc: "Redo" },
+        { key: "Ctrl+Shift+Z / Ctrl+Y", desc: "Redo" },
         { key: "F11 / Super+F", desc: "Fullscreen" },
         { key: "Ctrl+F", desc: "Find" },
         { key: "Ctrl+H", desc: "Find & Replace" },
         { key: "Ctrl+G / Enter", desc: "Next Match in Find" },
         { key: "Shift+Enter", desc: "Previous Match in Find" },
+        { key: "Escape", desc: "Close Find" },
         { key: "Ctrl+B", desc: "Bold" },
         { key: "Ctrl+I", desc: "Italic" },
         { key: "Ctrl+Shift+X", desc: "Strikethrough" },
@@ -42,7 +38,7 @@ Dialog {
         { key: "Ctrl+0", desc: "Reset Text Size" },
         { key: "Ctrl+scroll", desc: "Change Text Size" },
         { key: "Ctrl+? / Ctrl+/ / F1", desc: "Shortcuts" }
-    ].concat(extraShortcuts)
+    ]
 
     title: "Keyboard shortcuts"
     modal: true
