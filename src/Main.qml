@@ -150,13 +150,17 @@ ApplicationWindow {
 
     function closeSearch() {
         searchDelay.stop();
+        // Hand focus to the editor before hiding the bar. Hiding the field
+        // that holds focus leaves the input method with nothing focused for
+        // a moment, and fcitx5 can then miss the next Ctrl+F.
+        Qt.inputMethod.reset();
+        editor.forceActiveFocus();
         searchOpen = false;
         searchUpdating = true;
         backend.setSearchHighlight("", -1);
         editor.deselect();
         searchUpdating = false;
         replaceOpen = false;
-        editor.forceActiveFocus();
     }
 
     // Restyling a large document for each letter typed makes typing a word
@@ -660,6 +664,7 @@ ApplicationWindow {
                     color: win.textColor
                 }
                 onCursorRectangleChanged: editorFlick.ensureCursorVisible()
+                onCursorPositionChanged: backend.setCaretPosition(cursorPosition)
                 onFontChanged: backend.documentFontChanged()
 
                 // One edit command, so a single undo takes the change back.
@@ -786,30 +791,6 @@ ApplicationWindow {
                         replaceSelectionWith(pastedText);
                 }
 
-                function skipHiddenForward(position) {
-                    var pos = position;
-                    var ranges = backend.hiddenRangesAt(pos);
-                    for (var i = 0; i < ranges.length; i++) {
-                        if (pos >= ranges[i].start && pos < ranges[i].end) {
-                            pos = ranges[i].end;
-                            i = -1;
-                        }
-                    }
-                    return pos;
-                }
-
-                function skipHiddenBackward(position) {
-                    var pos = position;
-                    var ranges = backend.hiddenRangesAt(pos);
-                    for (var i = ranges.length - 1; i >= 0; i--) {
-                        if (pos > ranges[i].start && pos <= ranges[i].end) {
-                            pos = ranges[i].start;
-                            i = ranges.length;
-                        }
-                    }
-                    return pos;
-                }
-
                 function moveCursorVisibly(direction) {
                     if (selectionStart !== selectionEnd) {
                         cursorPosition = direction > 0 ? selectionEnd : selectionStart;
@@ -817,10 +798,7 @@ ApplicationWindow {
                     }
 
                     var pos = backend.cursorPositionStep(cursorPosition, direction);
-                    pos = Math.max(0, Math.min(text.length, pos));
-                    cursorPosition = direction > 0
-                        ? skipHiddenForward(pos)
-                        : skipHiddenBackward(pos);
+                    cursorPosition = Math.max(0, Math.min(text.length, pos));
                 }
 
                 function movePage(direction, extendSelection) {
