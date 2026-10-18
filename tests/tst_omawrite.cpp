@@ -1929,6 +1929,9 @@ private slots:
         load(QStringLiteral("plain"), 5);
         tabKey();
         QCOMPARE(text(), QStringLiteral("plain\t"));
+        load(QStringLiteral("\n- a"), 0);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("\t\n- a"));
         load(QStringLiteral("- a\n* * *"), 9);
         tabKey();
         QCOMPARE(text(), QStringLiteral("- a\n* * *\t"));

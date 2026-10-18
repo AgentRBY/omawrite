@@ -741,7 +741,8 @@ ApplicationWindow {
                     };
 
                     // A selection that ends at the start of a line leaves it be.
-                    var start = text.lastIndexOf("\n", selectionStart - 1) + 1;
+                    // lastIndexOf would read -1 as 0, a newline right there.
+                    var start = selectionStart > 0 ? text.lastIndexOf("\n", selectionStart - 1) + 1 : 0;
                     var end = text.indexOf("\n", Math.max(start, selectionEnd - 1));
                     if (end < 0)
                         end = text.length;
