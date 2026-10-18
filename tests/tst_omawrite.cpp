@@ -1914,12 +1914,17 @@ private slots:
         tabKey();
         QVERIFY(!text().contains(QStringLiteral("    ")));
 
-        // A fence indented under an item moves with it, but a selection
-        // running from a list into a code fence leaves it alone.
+        // A fence indented under an item moves with it, but one that starts
+        // the selection, or a selection running from a list into a code
+        // fence, is left alone.
         load(QStringLiteral("- a\n- b\n  ```\n  code\n  ```"), 4);
         QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 26));
         tabKey();
         QCOMPARE(text(), QStringLiteral("- a\n    - b\n      ```\n      code\n      ```"));
+        load(QStringLiteral("  ```\n  - x\n  ```"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
         load(QStringLiteral("- a\n  ```\n  - x\n  ```"), 0);
         QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
         tabKey();

@@ -747,12 +747,13 @@ ApplicationWindow {
                     if (end < 0)
                         end = text.length;
                     var lines = text.slice(start, end).split("\n");
-                    // A fence at the margin is no item, so it stops Tab, but
-                    // one indented under an item is part of it and moves along
-                    // whole. Only a selection that starts or ends inside code
-                    // would split one.
-                    if (!lines.some(listItem)
-                        || lines.some(function(line) { return /^\S/.test(line) && !listItem(line); })
+                    // The selection starts at an item and holds only lines that
+                    // belong to one: other items, blanks, and indented lines.
+                    // A fence indented under an item moves along with it whole;
+                    // a selection that starts or ends inside code would split it.
+                    var filled = lines.filter(function(line) { return /\S/.test(line); });
+                    if (!listItem(filled[0] || "")
+                        || filled.some(function(line) { return /^\S/.test(line) && !listItem(line); })
                         || backend.insideFence(start)
                         || backend.insideFence(end))
                         return false;
@@ -761,7 +762,6 @@ ApplicationWindow {
                     // the selection is kept. Four spaces nest under any marker
                     // up to "99.", and Shift+Tab lifts no further than the
                     // shallowest line can go.
-                    var filled = lines.filter(function(line) { return /\S/.test(line); });
                     var step = outdent ? -Math.min.apply(null, [4].concat(filled.map(columns))) : 4;
                     if (step === 0)
                         return true;
