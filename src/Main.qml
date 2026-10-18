@@ -794,7 +794,9 @@ ApplicationWindow {
                     if (selectionStart !== selectionEnd || cursorPosition < 2)
                         return false;
 
-                    if (text.slice(cursorPosition - 2, cursorPosition) !== "\n\n")
+                    // getText reads just the two characters, where text would
+                    // copy the whole document on every Backspace.
+                    if (getText(cursorPosition - 2, cursorPosition) !== "\n\n")
                         return false;
 
                     var start = cursorPosition - 2;

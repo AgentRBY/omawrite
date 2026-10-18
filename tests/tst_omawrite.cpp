@@ -1,4 +1,8 @@
 #include <QtTest>
+#include <QScopeGuard>
+#include <QThreadPool>
+#include <QSignalSpy>
+#include <QSemaphore>
 #include <QFont>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -384,12 +388,51 @@ private slots:
         editor->setProperty("text", QStringLiteral("one two"));
         QTRY_COMPARE(backend.wordCount(), 2);
 
-        // Edits made while a count runs are counted once it finishes.
+        // Hold the thread pool's only thread so a count stays in flight until
+        // the gate opens, whatever the timing.
+        QThreadPool *pool = QThreadPool::globalInstance();
+        const int maxThreads = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore gate;
+        QSemaphore held;
+        auto hold = [&] {
+            pool->start([&] {
+                held.release();
+                gate.acquire();
+            });
+            held.acquire();
+        };
+        const auto restore = qScopeGuard([&] {
+            gate.release(2);
+            pool->waitForDone();
+            pool->setMaxThreadCount(maxThreads);
+        });
+        auto &counting = backend.m_wordCountWatcher;
+        QSignalSpy counted(&counting, &QFutureWatcher<int>::finished);
+
+        // An edit made while a count runs gets one more count after it.
+        hold();
         QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 7), Q_ARG(QString, QStringLiteral(" three")));
+        QTRY_VERIFY(counting.isRunning());
         QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 13), Q_ARG(QString, QStringLiteral(" four")));
-        QTRY_COMPARE(backend.wordCount(), 4);
-        QMetaObject::invokeMethod(editor, "remove", Q_ARG(int, 0), Q_ARG(int, 4));
-        QTRY_COMPARE(backend.wordCount(), 3);
+        QTRY_VERIFY(!backend.m_wordCountTimer.isActive());
+        QCOMPARE(backend.wordCount(), 2);
+        gate.release();
+        QTRY_COMPARE(counted.count(), 2);
+        QCOMPARE(backend.wordCount(), 4);
+
+        // A file loaded while a count runs keeps its own count, and the
+        // outdated one is dropped when it finishes.
+        hold();
+        QMetaObject::invokeMethod(editor, "insert", Q_ARG(int, 18), Q_ARG(QString, QStringLiteral(" five")));
+        QTRY_VERIFY(counting.isRunning());
+        backend.loadDocumentText(QStringLiteral("alpha"));
+        QCOMPARE(backend.wordCount(), 1);
+        gate.release();
+        QTRY_COMPARE(counted.count(), 3);
+        QCOMPARE(backend.wordCount(), 1);
+        QVERIFY(!counting.isRunning());
+        QVERIFY(!backend.m_wordCountTimer.isActive());
     }
 
     void reachesAndLeavesTheReplaceFieldFromTheKeyboard() {
