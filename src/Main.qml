@@ -100,6 +100,7 @@ ApplicationWindow {
     // match. When the document changes underneath, the matches follow along
     // without taking the writer's caret.
     function updateSearch(selectMatch) {
+        searchDelay.stop();
         var previous = searchMatchIndex >= 0 ? searchMatches[searchMatchIndex] : 0;
         searchMatches = backend.searchMatches(searchField.text);
         searchMatchIndex = selectMatch ? (searchMatches.length > 0 ? 0 : -1)
@@ -126,7 +127,20 @@ ApplicationWindow {
         searchUpdating = false;
     }
 
+    // Typing in the search field waits for a pause before searching, so
+    // anything that acts on the matches catches up with the field first.
+    function flushSearch() {
+        if (searchDelay.running)
+            updateSearch(true);
+    }
+
     function moveSearch(direction) {
+        // A pending search lands on its first match, which is where the
+        // writer meant to go, rather than one past it.
+        if (searchDelay.running) {
+            updateSearch(true);
+            return;
+        }
         if (searchMatches.length === 0)
             return;
         searchMatchIndex = (searchMatchIndex + direction + searchMatches.length)
@@ -134,7 +148,21 @@ ApplicationWindow {
         showSearchMatch(true);
     }
 
+    // The matches stop following the field and the text while the bar is
+    // closed, and a search still waiting for a pause is dropped on closing,
+    // so opening the bar searches again for what the field holds.
+    function openSearch(withReplace) {
+        searchOpen = true;
+        if (withReplace)
+            replaceOpen = true;
+        searchField.forceActiveFocus();
+        searchField.selectAll();
+        // A search still waiting in an open bar lands on its first match.
+        updateSearch(searchDelay.running);
+    }
+
     function closeSearch() {
+        searchDelay.stop();
         // Hand focus to the editor before hiding the bar. Hiding the field
         // that holds focus leaves the input method with nothing focused for
         // a moment, and fcitx5 can then miss the next Ctrl+F.
@@ -148,6 +176,14 @@ ApplicationWindow {
         replaceOpen = false;
     }
 
+    // Restyling a large document for each letter typed makes typing a word
+    // stall, so the search waits until the typing pauses.
+    Timer {
+        id: searchDelay
+        interval: 150
+        onTriggered: win.updateSearch(true)
+    }
+
     Shortcut {
         sequence: "Ctrl+S"
         onActivated: backend.save()
@@ -155,12 +191,7 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+H"
-        onActivated: {
-            searchOpen = true;
-            replaceOpen = true;
-            searchField.forceActiveFocus();
-            searchField.selectAll();
-        }
+        onActivated: win.openSearch(true)
     }
 
     Shortcut {
@@ -188,7 +219,7 @@ ApplicationWindow {
     }
 
     Shortcut {
-        sequence: "Ctrl+?"
+        sequences: ["Ctrl+?", "Ctrl+/", "F1"]
         onActivated: shortcutsDialog.open()
     }
 
@@ -253,11 +284,7 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        onActivated: {
-            searchOpen = true;
-            searchField.forceActiveFocus();
-            searchField.selectAll();
-        }
+        onActivated: win.openSearch(false)
     }
 
     Shortcut {
@@ -364,20 +391,14 @@ ApplicationWindow {
         onReloadRequested: backend.reloadFromDisk()
     }
 
-    Dialog {
+    ShortcutsDialog {
         id: shortcutsDialog
-        objectName: "shortcutsDialog"
-        modal: true
-        title: "Keyboard shortcuts"
-        standardButtons: Dialog.Close
-        anchors.centerIn: parent
-        // A bare Label as contentItem trips a Popup implicitWidth binding loop
-        // (Material Dialog.qml:14); as a child, the default content item sizes
-        // to it without the feedback.
-        Label {
-            text: "Ctrl+S  Save\nCtrl+Shift+S  Save As\nCtrl+O  Open\nCtrl+N  New Window\nCtrl+F  Find\nCtrl+H  Find and Replace\nCtrl+B  Bold\nCtrl+I  Italic\nCtrl+Shift+X  Strikethrough\nCtrl+K  Link\nCtrl+Shift+C  Copy as HTML\nCtrl+P  Print\nCtrl+= / Ctrl+-  Text Size\nCtrl+0  Reset Text Size\nF11 / Super+F  Fullscreen\nCtrl+?  Shortcuts"
-            lineHeight: 1.5
-        }
+        darkMode: win.darkMode
+        textScale: win.textScale
+        textColor: win.textColor
+        activeButtonColor: backend.themeAccent
+        containerWidth: win.width
+        containerHeight: win.height
     }
 
     Item {
@@ -723,6 +744,66 @@ ApplicationWindow {
                     replaceSelectionWith("\n\n");
                 }
 
+                // Tab nests the list items the caret or selection touches four
+                // spaces deeper, and Shift+Tab lifts them back out by the same
+                // step. Lines that are neither items, their indented
+                // continuations, nor blank, and code fences, leave Tab alone.
+                function indentListItems(outdent) {
+                    // "* * *" and "- - -" are rules, not items.
+                    var listItem = function(line) {
+                        return /^[ \t]*(?:[-+*]|\d+[.)])[ \t]/.test(line)
+                            && !/^ {0,3}([-*])([ \t]*\1){2,}[ \t]*$/.test(line);
+                    };
+                    // A tab runs to the next four-column stop.
+                    var columns = function(line) {
+                        return line.match(/^[ \t]*/)[0].split("").reduce(function(column, c) {
+                            return c === "\t" ? column + 4 - column % 4 : column + 1;
+                        }, 0);
+                    };
+
+                    // A selection that ends at the start of a line leaves it be.
+                    // lastIndexOf would read -1 as 0, a newline right there.
+                    var start = selectionStart > 0 ? text.lastIndexOf("\n", selectionStart - 1) + 1 : 0;
+                    var end = text.indexOf("\n", Math.max(start, selectionEnd - 1));
+                    if (end < 0)
+                        end = text.length;
+                    var lines = text.slice(start, end).split("\n");
+                    // The selection starts at an item and holds only lines that
+                    // belong to one: other items, blanks, and indented lines.
+                    // A fence indented under an item moves along with it whole;
+                    // a selection that starts or ends inside code would split it.
+                    var filled = lines.filter(function(line) { return /\S/.test(line); });
+                    if (!listItem(filled[0] || "")
+                        || filled.some(function(line) { return /^\S/.test(line) && !listItem(line); })
+                        || backend.insideFence(start)
+                        || backend.insideFence(end))
+                        return false;
+
+                    // Every line moves by the same step, so the nesting within
+                    // the selection is kept. Four spaces nest under any marker
+                    // up to "99.", and Shift+Tab lifts no further than the
+                    // shallowest line can go.
+                    var step = outdent ? -Math.min.apply(null, [4].concat(filled.map(columns))) : 4;
+                    if (step === 0)
+                        return true;
+                    var moved = lines.map(function(line) {
+                        var lead = line.match(/^[ \t]*/)[0];
+                        return /\S/.test(line)
+                            ? " ".repeat(columns(line) + step) + line.slice(lead.length)
+                            : line;
+                    });
+                    var nested = moved.join("\n");
+                    var from = Math.max(start, selectionStart + moved[0].length - lines[0].length);
+                    // Neither end of the selection leaves its line, even when
+                    // the indent it sat in is gone.
+                    var lastStart = start + nested.length - moved[moved.length - 1].length;
+                    var to = Math.max(from, lastStart, selectionEnd + nested.length - (end - start));
+                    var forward = cursorPosition === selectionEnd;
+                    replaceText(start, end, nested);
+                    select(forward ? from : to, forward ? to : from);
+                    return true;
+                }
+
                 function escapeMarkdownLinkText(linkText) {
                     return linkText.replace(/\\/g, "\\\\")
                                    .replace(/\[/g, "\\[")
@@ -874,6 +955,11 @@ ApplicationWindow {
                     } else if (!commandModifier && !(event.modifiers & Qt.ShiftModifier)
                                && event.key === Qt.Key_Left) {
                         moveCursorVisibly(-1);
+                        event.accepted = true;
+                    } else if (!commandModifier
+                               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)
+                               && indentListItems(event.key === Qt.Key_Backtab
+                                                  || (event.modifiers & Qt.ShiftModifier))) {
                         event.accepted = true;
                     } else if (!commandModifier
                                && (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)) {
@@ -1095,7 +1181,7 @@ ApplicationWindow {
                         selectedTextColor: win.selectionTextColor
                         font.pixelSize: win.scaledSize(17)
                         clip: true
-                        onTextChanged: win.updateSearch(true)
+                        onTextChanged: searchDelay.restart()
                         Keys.onReturnPressed: function(event) {
                             win.moveSearch((event.modifiers & Qt.ShiftModifier) ? -1 : 1);
                             event.accepted = true;
@@ -1156,6 +1242,7 @@ ApplicationWindow {
                     visible: win.replaceOpen
                     text: "Replace"
                     onClicked: {
+                        win.flushSearch();
                         if (win.searchMatchIndex < 0) return;
                         var start = win.searchMatches[win.searchMatchIndex];
                         var replacement = replaceField.text;
@@ -1175,6 +1262,7 @@ ApplicationWindow {
                     visible: win.replaceOpen
                     text: "All"
                     onClicked: {
+                        win.flushSearch();
                         var query = searchField.text;
                         var matches = win.searchMatches;
                         if (query.length === 0 || matches.length === 0) return;

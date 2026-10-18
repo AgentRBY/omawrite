@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QSemaphore>
 #include <QFont>
+#include <QAbstractTextDocumentLayout>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextLayout>
@@ -51,6 +52,7 @@ class OmawriteTest : public QObject {
 
 private slots:
     void initTestCase() {
+        QCoreApplication::setApplicationVersion(QStringLiteral("1.2.3-test"));
         QStandardPaths::setTestModeEnabled(true);
         QVERIFY(m_settingsDirectory.isValid());
         QQuickStyle::setStyle(QStringLiteral("Material"));
@@ -72,6 +74,34 @@ private slots:
         QCOMPARE(Backend::countWords(QStringLiteral("𠀀𠀁 foo")), 3);
         QCOMPARE(Backend::countWords(QStringLiteral("안녕하세요 세계")), 2);
         QCOMPARE(Backend::countWords(QString()), 0);
+    }
+
+    void restylesTheWholeDocumentWithItsLayoutFinished() {
+        // Qt Quick's render thread lays out any block left without a layout,
+        // starting the layout's timers from the wrong thread.
+        QTextDocument document;
+        document.setTextWidth(600);
+        QStringList lines;
+        for (int i = 0; i < 3000; ++i)
+            lines << QStringLiteral("line %1 with **bold** and a [link](u)").arg(i);
+        document.setPlainText(lines.join(QLatin1Char('\n')));
+        MarkdownHighlighter highlighter(&document);
+        document.documentLayout()->documentSize();
+
+        const auto unlaidBlocks = [&document] {
+            int count = 0;
+            for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+                if (block.layout()->lineCount() == 0)
+                    ++count;
+            }
+            return count;
+        };
+        highlighter.setSearch(QStringLiteral("line"), -1);
+        QCOMPARE(unlaidBlocks(), 0);
+        highlighter.setSearch(QString(), -1);
+        QCOMPARE(unlaidBlocks(), 0);
+        highlighter.setTheme(false, QString(), QString(), QString(), QString());
+        QCOMPARE(unlaidBlocks(), 0);
     }
 
     void normalizesLinks() {
@@ -273,6 +303,7 @@ private slots:
         editor->setProperty("text", QStringLiteral("foo bar foo"));
         QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
         searchField->setProperty("text", QStringLiteral("foo"));
+        QMetaObject::invokeMethod(window, "flushSearch");
         QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("foo"));
 
         // Back in the text, typing goes where the caret is.
@@ -299,7 +330,9 @@ private slots:
         };
         editor->setProperty("text", QStringLiteral("long text\nfoo\nfoo"));
         searchField->setProperty("text", QStringLiteral("x"));
+        QMetaObject::invokeMethod(window, "flushSearch");
         searchField->setProperty("text", QStringLiteral("foo"));
+        QMetaObject::invokeMethod(window, "flushSearch");
         QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
         const QColor current = matchBackground(2);
         const QColor other = matchBackground(1);
@@ -322,6 +355,7 @@ private slots:
         // character whose lowercase is longer.
         editor->setProperty("text", QString::fromUtf8("\xC4\xB0 ab"));
         searchField->setProperty("text", QStringLiteral("ab"));
+        QMetaObject::invokeMethod(window, "flushSearch");
         QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("ab"));
     }
 
@@ -433,6 +467,100 @@ private slots:
         QCOMPARE(backend.wordCount(), 1);
         QVERIFY(!counting.isRunning());
         QVERIFY(!backend.m_wordCountTimer.isActive());
+    }
+
+    void searchWaitsForTypingToPause() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *searchField = window->findChild<QObject *>(QStringLiteral("searchField"));
+        QObject *replaceField = window->findChild<QObject *>(QStringLiteral("replaceField"));
+        QObject *replaceAllButton = window->findChild<QObject *>(QStringLiteral("replaceAllButton"));
+        QVERIFY(editor && searchField && replaceField && replaceAllButton);
+
+        // Typing does not search until it pauses.
+        editor->setProperty("text", QStringLiteral("foo bar foo"));
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("f"));
+        searchField->setProperty("text", QStringLiteral("fo"));
+        QCOMPARE(window->property("searchMatches").toList().size(), 0);
+        QTRY_COMPARE(window->property("searchMatches").toList().size(), 2);
+        QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("fo"));
+
+        // Return before the pause lands on the new query's first match.
+        searchField->setProperty("text", QStringLiteral("bar"));
+        QMetaObject::invokeMethod(window, "moveSearch", Q_ARG(QVariant, 1));
+        QCOMPARE(window->property("searchMatchIndex").toInt(), 0);
+        QCOMPARE(editor->property("selectedText").toString(), QStringLiteral("bar"));
+
+        // Replace All before the pause replaces the new query's matches.
+        searchField->setProperty("text", QStringLiteral("foo"));
+        replaceField->setProperty("text", QStringLiteral("x"));
+        QMetaObject::invokeMethod(replaceAllButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("x bar x"));
+
+        // Closing the bar drops a search still waiting for the pause.
+        searchField->setProperty("text", QStringLiteral("bar"));
+        QMetaObject::invokeMethod(window, "closeSearch");
+        QTest::qWait(300);
+        QCOMPARE(editor->property("selectedText").toString(), QString());
+    }
+
+    void reopeningTheFindBarSearchesForWhatItHolds() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QObject *searchField = window->findChild<QObject *>(QStringLiteral("searchField"));
+        QObject *replaceField = window->findChild<QObject *>(QStringLiteral("replaceField"));
+        QObject *replaceAllButton = window->findChild<QObject *>(QStringLiteral("replaceAllButton"));
+        QVERIFY(editor && searchField && replaceField && replaceAllButton);
+
+        editor->setProperty("text", QStringLiteral("foo bar foo"));
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("foo"));
+        QTRY_COMPARE(window->property("searchMatches").toList().size(), 2);
+
+        // A query changed just before closing the bar is searched on reopening,
+        // so Replace All does not cut at the old query's matches.
+        searchField->setProperty("text", QStringLiteral("o"));
+        QMetaObject::invokeMethod(window, "closeSearch");
+        QTest::keyClick(window, Qt::Key_H, Qt::ControlModifier);
+        replaceField->setProperty("text", QStringLiteral("x"));
+        QMetaObject::invokeMethod(replaceAllButton, "clicked");
+        QCOMPARE(editor->property("text").toString(), QStringLiteral("fxx bar fxx"));
+
+        // Edits made while the bar was closed are searched on reopening too.
+        QMetaObject::invokeMethod(window, "closeSearch");
+        editor->setProperty("text", QStringLiteral("a bar"));
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        searchField->setProperty("text", QStringLiteral("bar"));
+        QTRY_COMPARE(window->property("searchMatches").toList().size(), 1);
+        QMetaObject::invokeMethod(window, "closeSearch");
+        editor->setProperty("text", QStringLiteral("bar bar bar"));
+        QTest::keyClick(window, Qt::Key_F, Qt::ControlModifier);
+        QCOMPARE(window->property("searchMatches").toList().size(), 3);
     }
 
     void reachesAndLeavesTheReplaceFieldFromTheKeyboard() {
@@ -1868,6 +1996,154 @@ private slots:
         QCOMPARE(text(), QStringLiteral("```\ncode\n\n\n```"));
     }
 
+    void nestsListItemsOnTab() {
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        QVERIFY(!mainQmlPath.isEmpty());
+
+        Backend backend;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+
+        QObject *editor = window->findChild<QObject *>(QStringLiteral("sourceEditor"));
+        QVERIFY(editor);
+        QMetaObject::invokeMethod(editor, "forceActiveFocus");
+        QVERIFY(editor->property("activeFocus").toBool());
+
+        auto text = [&] { return editor->property("text").toString(); };
+        auto caret = [&] { return editor->property("cursorPosition").toInt(); };
+        auto load = [&](const QString &content, int position) {
+            editor->setProperty("text", content);
+            editor->setProperty("cursorPosition", position);
+        };
+        auto tabKey = [&] { QTest::keyClick(window, Qt::Key_Tab); };
+        auto backtabKey = [&] { QTest::keyClick(window, Qt::Key_Backtab, Qt::ShiftModifier); };
+
+        auto selection = [&] {
+            return QStringLiteral("%1-%2@%3").arg(editor->property("selectionStart").toInt())
+                                             .arg(editor->property("selectionEnd").toInt())
+                                             .arg(caret());
+        };
+
+        // An item nests four spaces under the item above, the caret rides
+        // along, and Shift+Tab puts it back.
+        load(QStringLiteral("- one\n- two"), 11);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- one\n    - two"));
+        QCOMPARE(caret(), 15);
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- one\n- two"));
+        QCOMPARE(caret(), 11);
+
+        // One undo takes a nesting back.
+        tabKey();
+        QMetaObject::invokeMethod(editor, "undo");
+        QCOMPARE(text(), QStringLiteral("- one\n- two"));
+
+        // The same step nests under ordered markers, the empty one Return
+        // leaves included, and Shift+Tab steps back out one level.
+        load(QStringLiteral("1. one"), 6);
+        QTest::keyClick(window, Qt::Key_Return);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("1. one\n    2. "));
+        load(QStringLiteral("10. a\n- b"), 9);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("10. a\n    - b"));
+        load(QStringLiteral("1. a\n    - b\n        - c"), 24);
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("1. a\n    - b\n    - c"));
+
+        // The first item nests all the same, an outermost one has nowhere to
+        // go, and a tab-indented one comes out like a spaced one.
+        load(QStringLiteral("- a"), 3);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("    - a"));
+        backtabKey();
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a"));
+        load(QStringLiteral("- a\n\t- b"), 8);
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b"));
+
+        // A selection moves the items it touches together, keeping their
+        // depth and its own direction, but not a line it only reaches the
+        // start of.
+        load(QStringLiteral("- a\n- b\n    - c\n- d"), 16);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 4));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n    - b\n        - c\n- d"));
+        QCOMPARE(selection(), QStringLiteral("8-24@8"));
+
+        // Shift+Tab lifts every line by one step, no further than the
+        // shallowest line goes, so the nesting within the selection is kept.
+        load(QStringLiteral("- a\n  - b\n    - c"), 6);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b\n  - c"));
+        load(QStringLiteral("- a\n    - b\n  - c"), 6);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n  - b\n- c"));
+        load(QStringLiteral("    - a\n    - b"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 10));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b"));
+        QCOMPARE(selection(), QStringLiteral("0-4@4"));
+        load(QStringLiteral("- a\n \t- b\n    - c"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 15));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n- b\n- c"));
+
+        // Indented continuation lines move with their item, but a paragraph
+        // at the margin is no item, so Tab leaves the list alone.
+        load(QStringLiteral("- a\n- b\n  more"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n    - b\n      more"));
+        load(QStringLiteral("- a\n- b\n\nParagraph"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 18));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
+
+        // A fence indented under an item moves with it, but one that starts
+        // the selection, or a selection running from a list into a code
+        // fence, is left alone.
+        load(QStringLiteral("- a\n- b\n  ```\n  code\n  ```"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 26));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n    - b\n      ```\n      code\n      ```"));
+        load(QStringLiteral("  ```\n  - x\n  ```"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
+        load(QStringLiteral("- a\n  ```\n  - x\n  ```"), 0);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
+        tabKey();
+        QVERIFY(!text().contains(QStringLiteral("    ")));
+
+        // Outside a list, on a rule, and inside a code fence, Tab types a tab.
+        load(QStringLiteral("plain"), 5);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("plain\t"));
+        load(QStringLiteral("\n- a"), 0);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("\t\n- a"));
+        load(QStringLiteral("- a\n* * *"), 9);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n* * *\t"));
+        load(QStringLiteral("```\n- a\n```"), 7);
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("```\n- a\t\n```"));
+    }
+
     void closesParagraphBreaksOnBackspace() {
         const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
         QVERIFY(!mainQmlPath.isEmpty());
@@ -2137,14 +2413,22 @@ private slots:
         // The ends of the ladder hold instead of running away.
         for (int step = 0; step < 8; ++step)
             backend.decreaseTextSize();
-        QCOMPARE(backend.textScale(), 1.5 * 0.67);
+        QCOMPARE(backend.textScale(), 1.5 * 0.5);
         const int settledCount = textScaleSpy.count();
         backend.decreaseTextSize();
         QCOMPARE(textScaleSpy.count(), settledCount);
 
         // A new window picks the size back up.
         Backend reopened;
-        QCOMPARE(reopened.textScale(), 0.67);
+        QCOMPARE(reopened.textScale(), 0.5);
+
+        for (int step = 0; step < 20; ++step)
+            backend.increaseTextSize();
+        QCOMPARE(backend.textScale(), 1.5 * 3.0);
+        QCOMPARE(Backend().textScale(), 3.0);
+        const int maximumCount = textScaleSpy.count();
+        backend.increaseTextSize();
+        QCOMPARE(textScaleSpy.count(), maximumCount);
 
         backend.resetTextSize();
         QCOMPARE(backend.textScale(), 1.5);
@@ -2212,7 +2496,13 @@ private slots:
         QTest::keyClick(window, Qt::Key_Minus, Qt::ControlModifier);
         QCOMPARE(backend.textScale(), 1.1);
 
-        backend.resetTextSize();
+        // Exercise the actual reset binding as well as zooming out below 100%.
+        QTest::keyClick(window, Qt::Key_0, Qt::ControlModifier);
+        QCOMPARE(backend.textScale(), 1.0);
+        QTest::keyClick(window, Qt::Key_Minus, Qt::ControlModifier);
+        QCOMPARE(backend.textScale(), 0.9);
+        QTest::keyClick(window, Qt::Key_0, Qt::ControlModifier);
+        QCOMPARE(backend.textScale(), 1.0);
     }
 
     void keepsTextColumnInsideNarrowWindows() {
@@ -2273,6 +2563,70 @@ private slots:
         QCOMPARE(dialog->property("implicitWidth").toReal() > 0, true);
 
         QCOMPARE(bindingLoops.count(), 0);
+    }
+
+    void shortcutReferenceFitsTheWindow_data() {
+        QTest::addColumn<int>("windowWidth");
+        QTest::addColumn<qreal>("scale");
+        QTest::newRow("standard") << 1280 << qreal(1);
+        QTest::newRow("narrow") << 394 << qreal(1);
+        QTest::newRow("small-text") << 720 << qreal(0.5);
+        QTest::newRow("large-text") << 720 << qreal(3);
+        QTest::newRow("narrow-large-text") << 394 << qreal(3);
+    }
+
+    void shortcutReferenceFitsTheWindow() {
+        QFETCH(int, windowWidth);
+        QFETCH(qreal, scale);
+        const QString mainQmlPath = QFINDTESTDATA("../src/Main.qml");
+        Backend backend;
+        backend.setDesktopTextScale(scale);
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(mainQmlPath));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *window = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(window);
+        window->setMinimumWidth(0);
+        window->setWidth(windowWidth);
+        window->setHeight(520);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate();
+        QTRY_VERIFY(window->isActive());
+        QObject *dialog = window->findChild<QObject *>(QStringLiteral("shortcutsDialog"));
+        QVERIFY(dialog);
+
+        // All aliases open the dialog, and Escape closes it without changing text size.
+        for (auto key : {Qt::Key_Slash, Qt::Key_Question, Qt::Key_F1}) {
+            QTest::keyClick(window, key, key == Qt::Key_F1 ? Qt::NoModifier : Qt::ControlModifier);
+            QTRY_VERIFY(dialog->property("opened").toBool());
+            QObject *versionLabel = dialog->findChild<QObject *>(QStringLiteral("versionLabel"));
+            QVERIFY(versionLabel);
+            QVERIFY(versionLabel->property("visible").toBool());
+            QCOMPARE(versionLabel->property("text").toString(),
+                     QStringLiteral("Omawrite ") + QCoreApplication::applicationVersion());
+            QTest::keyClick(window, Qt::Key_Minus, Qt::ControlModifier);
+            QCOMPARE(backend.textScale(), scale);
+            QVERIFY(dialog->property("x").toReal() >= 0);
+            QVERIFY(dialog->property("y").toReal() >= 0);
+            QVERIFY(dialog->property("x").toReal() + dialog->property("width").toReal()
+                    <= window->width());
+            QVERIFY(dialog->property("y").toReal() + dialog->property("height").toReal()
+                    <= window->height());
+            auto *grid = dialog->findChild<QQuickItem *>(QStringLiteral("shortcutsGrid"));
+            QVERIFY(grid);
+            QCoreApplication::processEvents();
+            for (auto *row : grid->childItems()) {
+                if (!row->inherits("QQuickRowLayout")) continue;
+                QVERIFY(row->x() + row->width() <= grid->width() + 1);
+                for (auto *label : row->childItems())
+                    QVERIFY(label->x() + label->width() <= row->width() + 1);
+            }
+            QTest::keyClick(window, Qt::Key_Escape);
+            QTRY_VERIFY(!dialog->property("visible").toBool());
+        }
     }
 
     void remembersLastSaveDirectory() {
