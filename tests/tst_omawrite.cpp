@@ -1883,12 +1883,16 @@ private slots:
         QCOMPARE(text(), QStringLiteral("- a\n    - b\n        - c\n- d"));
         QCOMPARE(selection(), QStringLiteral("8-24@8"));
 
-        // Shift+Tab lifts every line by the first item's step, so a shallow
-        // item does not flatten the one nested under it.
+        // Shift+Tab lifts every line by one step, no further than the
+        // shallowest line goes, so the nesting within the selection is kept.
         load(QStringLiteral("- a\n  - b\n    - c"), 6);
         QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
         backtabKey();
         QCOMPARE(text(), QStringLiteral("- a\n- b\n  - c"));
+        load(QStringLiteral("- a\n    - b\n  - c"), 6);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 17));
+        backtabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n  - b\n- c"));
 
         // Indented continuation lines move with their item, but a paragraph
         // at the margin is no item, so Tab leaves the list alone.
@@ -1901,7 +1905,12 @@ private slots:
         tabKey();
         QVERIFY(!text().contains(QStringLiteral("    ")));
 
-        // A selection running from a list into a code fence leaves it alone.
+        // A fence indented under an item moves with it, but a selection
+        // running from a list into a code fence leaves it alone.
+        load(QStringLiteral("- a\n- b\n  ```\n  code\n  ```"), 4);
+        QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 26));
+        tabKey();
+        QCOMPARE(text(), QStringLiteral("- a\n    - b\n      ```\n      code\n      ```"));
         load(QStringLiteral("- a\n  ```\n  - x\n  ```"), 0);
         QMetaObject::invokeMethod(editor, "moveCursorSelection", Q_ARG(int, 14));
         tabKey();

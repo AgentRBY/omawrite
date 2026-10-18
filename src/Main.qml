@@ -743,23 +743,28 @@ ApplicationWindow {
                     if (end < 0)
                         end = text.length;
                     var lines = text.slice(start, end).split("\n");
-                    var first = lines.filter(listItem)[0];
-                    if (first === undefined
+                    // A fence at the margin is no item, so it stops Tab, but
+                    // one indented under an item is part of it and moves along
+                    // whole. Only a selection that starts or ends inside code
+                    // would split one.
+                    if (!lines.some(listItem)
                         || lines.some(function(line) { return /^\S/.test(line) && !listItem(line); })
                         || backend.insideFence(start)
-                        || backend.insideFence(text.lastIndexOf("\n", end - 1) + 1))
+                        || backend.insideFence(end))
                         return false;
 
                     // Every line moves by the same step, so the nesting within
                     // the selection is kept. Four spaces nest under any marker
-                    // up to "99.".
-                    var step = outdent ? -Math.min(4, columns(first)) : 4;
+                    // up to "99.", and Shift+Tab lifts no further than the
+                    // shallowest line can go.
+                    var filled = lines.filter(function(line) { return /\S/.test(line); });
+                    var step = outdent ? -Math.min.apply(null, [4].concat(filled.map(columns))) : 4;
                     if (step === 0)
                         return true;
                     var moved = lines.map(function(line) {
                         var lead = line.match(/^[ \t]*/)[0];
                         return /\S/.test(line)
-                            ? " ".repeat(Math.max(0, columns(line) + step)) + line.slice(lead.length)
+                            ? " ".repeat(columns(line) + step) + line.slice(lead.length)
                             : line;
                     });
                     var nested = moved.join("\n");
