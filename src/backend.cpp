@@ -805,12 +805,21 @@ void Backend::loadDocumentText(const QString &text) {
         return;
     }
 
+    // Inserting under the line height already set styles the text once, where
+    // setPlainText and a typography pass after it would restyle it twice.
     m_loading = true;
-    m_document->setPlainText(text);
+    const bool undoEnabled = m_document->isUndoRedoEnabled();
+    m_document->setUndoRedoEnabled(false);
+    m_document->setPlainText(QString());
+    QTextCursor cursor(m_document);
+    cursor.beginEditBlock();
+    cursor.setBlockFormat(lineHeightFormat());
+    cursor.insertText(text);
+    cursor.endEditBlock();
+    m_document->setUndoRedoEnabled(undoEnabled);
     m_lastDocumentText = text;
     m_loading = false;
 
-    applyDocumentTypography();
     m_wordCountTimer.stop();
     m_wordCountStale = true;
     m_wordCountAgain = false;
