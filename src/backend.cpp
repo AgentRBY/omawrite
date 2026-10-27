@@ -14,6 +14,7 @@
 #include <QProcess>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QQuickItem>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
 #include <QScreen>
@@ -274,6 +275,11 @@ void Backend::attachDocument(QObject *textDocument) {
 
     if (m_highlighter)
         delete m_highlighter.data();
+
+    // Qt Quick draws only the visible part of a long text, but turns that on
+    // only for text set through TextEdit.text, never through its document.
+    if (auto *editor = qobject_cast<QQuickItem *>(quickDocument->parent()))
+        editor->setFlag(QQuickItem::ItemObservesViewport);
 
     m_document = quickDocument->textDocument();
     m_lastDocumentText = m_document->toPlainText();
